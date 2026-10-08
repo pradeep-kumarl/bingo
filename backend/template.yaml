@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09' # Declare the CloudFormation template version
+Transform: AWS::Serverless-2016-10-31 # Apply AWS Serverless Application Model (SAM) macros
+Description: BinGo Waste Management Backend - SAM Template for API, DynamoDB, and SNS # Describe the application stack purpose
+# Define global settings applicable to all serverless functions in this template
+Globals: # Global configuration section for SAM resources
+  Function: # Settings applied to all AWS Lambda functions defined below
+    Timeout: 15 # Set maximum Lambda execution timeout to 15 seconds
+    MemorySize: 256 # Allocate 256 MB RAM for balanced cost and compute performance
+    Runtime: nodejs20.x # Use Node.js 20 LTS runtime for modern JavaScript and TypeScript support
+    Architectures: # Configure CPU architecture
+      - arm64 # Use Graviton2 arm64 architecture for 20% lower cost and better energy efficiency
+    Environment: # Define environment variables injected into all Lambda functions
+      Variables: # Key-value map of environment variables
+        TABLE_NAME: !Ref BingoTable # Pass the DynamoDB table name to Lambda code
+        SNS_TOPIC_ARN: !Ref SwapAlertsTopic # Pass the SNS alert topic ARN to Lambda code
+        BAY_SECRET: !Ref BaySecretParam # Pass the HMAC secret key used for signing QR tokens
+# Define input parameters that can be overridden during deployment
+Parameters: # Template parameters section
+  StageName: # Environment stage identifier parameter
+    Type: String # Parameter data type is a string
+    Default: dev # Default deployment stage is dev
+    Description: Deployment stage environment name (e.g. dev, prod) # Explain parameter usage
+  BaySecretParam: # Secret key used for HMAC-SHA256 signature generation and verification
+    Type: String # Parameter data type is a string
+    Default: bingo-dev-super-secret-key-32ch # Default secret for local and dev testing
+    NoEcho: true # Mask the secret parameter value in CloudFormation console logs
+# Define AWS infrastructure resources managed by this template
+Resources: # CloudFormation and SAM resources declaration
+  # DynamoDB single-table design for zero idle cost and high performance
+  BingoTable: # Primary DynamoDB table resource definition
+    Type: AWS::DynamoDB::Table # CloudFormation DynamoDB table resource type
+    Properties: # DynamoDB table configuration properties
+      TableName: !Sub "bingo-data-${StageName}" # Construct unique table name per deployment stage
+      BillingMode: PAY_PER_REQUEST # Use on-demand billing mode for zero idle cost under free tier
+      AttributeDefinitions: # Define primary key and index attribute names and data types
+        - AttributeName: PK # Partition key attribute name
+          AttributeType: S # Partition key data type is String
+        - AttributeName: SK # Sort key attribute name
+          AttributeType: S # Sort key data type is String
+        - AttributeName: GSI1PK # Global Secondary Index partition key name
+          AttributeType: S # GSI1 partition key data type is String
+        - AttributeName: GSI1SK # Global Secondary Index sort key name
+          AttributeType: S # GSI1 sort key data type is String
+      KeySchema: # Define primary table key schema
+        - AttributeName: PK # Primary partition key attribute
+          KeyType: HASH # HASH represents the partition key
+        - AttributeName: SK # Primary sort key attribute
+          KeyType: RANGE # RANGE represents the sort key
+      GlobalSecondaryIndexes: # Secondary index definitions for cross-entity queries
+        - IndexName: GSI1 # Name of the first global secondary index
+          KeySchema: # Key schema definition for GSI1
+            - AttributeName: GSI1PK # GSI1 partition key
+              KeyType: HASH # HASH key for GSI1
+            - AttributeName: GSI1SK # GSI1 sort key
+              KeyType: RANGE # RANGE key for GSI1
+          Projection: # Define which attributes are projected into GSI1
+            ProjectionType: ALL # Project all attributes for direct item retrieval without re-querying
+      TimeToLiveSpecification: # Enable automatic DynamoDB record expiration for tokens and nonce
+        AttributeName: ttl # Attribute storing expiration time as epoch seconds
+        Enabled: true # Enable automatic TTL deletion feature
+  # Amazon SNS Topic for vehicle swap alerts at 75% fill capacity
+  SwapAlertsTopic: # SNS topic resource definition
+    Type: AWS::SNS::Topic # CloudFormation SNS Topic resource type
+    Properties: # SNS topic properties
+      TopicName: !Sub "bingo-vehicle-swap-alerts-${StageName}" # Unique topic name per stage
+      DisplayName: BinGo Vehicle Swap Alert Notifications # Human-readable display name for emails and SMS
+  # HTTP API Gateway (v2) for low-latency and cost-effective REST endpoints
+  BingoApi: # HTTP API Gateway resource definition
+    Type: AWS::Serverless::HttpApi # SAM resource type for API Gateway HTTP API
+    Properties: # HTTP API properties
+      CorsConfiguration: # Enable Cross-Origin Resource Sharing for web and mobile apps
+        AllowOrigins: # List of allowed origins
+          - "*" # Allow requests from any origin for development and mobile clients
+        AllowMethods: # List of allowed HTTP verbs
+          - GET # Allow HTTP GET method
+          - POST # Allow HTTP POST method
+          - OPTIONS # Allow HTTP OPTIONS pre-flight check method
+        AllowHeaders: # List of allowed HTTP headers
+          - Content-Type # Allow JSON content type header
+          - Authorization # Allow authorization token header
+          - X-Amz-Date # Allow AWS date header
+          - X-Api-Key # Allow API key header
+  # Lambda function to generate short-lived signed tokens for bay tablet displays
+  BayTokenFunction: # Lambda function definition for rotating QR token generator
+    Type: AWS::Serverless::Function # SAM serverless function resource type
+    Properties: # Function properties
+      CodeUri: functions/bay-token/ # Path to function source code directory
+      Handler: app.handler # Module and exported method name handling the invocation
+      Description: Generates short-lived signed HMAC-SHA256 tokens for bay QR screens # Function purpose
+      Events: # Trigger events for this function
+        GetTokenApi: # API Gateway trigger definition
+          Type: HttpApi # Trigger type is HTTP API
+          Properties: # Route properties
+            ApiId: !Ref BingoApi # Reference the HTTP API Gateway instance
+            Path: /bays/{bayId}/token # Route path with bayId URL parameter
+            Method: GET # HTTP method GET to fetch fresh token
+    Metadata: # Build instructions for SAM CLI
+      BuildMethod: esbuild # Use esbuild to compile and bundle TypeScript
+      BuildProperties: # esbuild bundling properties
+        Minify: true # Minify generated output JavaScript code
+        Target: es2022 # Target modern ECMAScript 2022 runtime
+        Sourcemap: true # Generate source map file for debugging
+        EntryPoints: # List entry point files
+          - app.ts # Compile app.ts TypeScript source file
+  # Lambda function to validate QR scans, update household cards, and trigger swap alerts
+  ScanFunction: # Lambda function definition for QR scan processing
+    Type: AWS::Serverless::Function # SAM serverless function resource type
+    Properties: # Function properties
+      CodeUri: functions/scan/ # Path to function source code directory
+      Handler: app.handler # Module and exported method name handling the invocation
+      Description: Validates QR scans, updates BinGo card state, and evaluates vehicle fill levels # Purpose
+      Policies: # IAM execution policies granted to this function
+        - DynamoDBCrudPolicy: # Grant full CRUD permissions on DynamoDB table
+            TableName: !Ref BingoTable # Scope permission strictly to BingoTable
+        - SNSPublishMessagePolicy: # Grant permission to publish alert messages to SNS
+            TopicName: !GetAtt SwapAlertsTopic.TopicName # Scope permission strictly to SwapAlertsTopic
+      Events: # Trigger events for this function
+        PostScanApi: # API Gateway trigger definition
+          Type: HttpApi # Trigger type is HTTP API
+          Properties: # Route properties
+            ApiId: !Ref BingoApi # Reference the HTTP API Gateway instance
+            Path: /scans # Route path for submitting scans
+            Method: POST # HTTP method POST for scan submission
+    Metadata: # Build instructions for SAM CLI
+      BuildMethod: esbuild # Use esbuild to compile and bundle TypeScript
+      BuildProperties: # esbuild bundling properties
+        Minify: true # Minify generated output JavaScript code
+        Target: es2022 # Target modern ECMAScript 2022 runtime
+        Sourcemap: true # Generate source map file for debugging
+        EntryPoints: # List entry point files
+          - app.ts # Compile app.ts TypeScript source file
+# Stack outputs for referencing in frontend apps and deployment scripts
+Outputs: # Stack output exports definition
+  HttpApiUrl: # Exported API Gateway base URL
+    Description: Base URL for BinGo HTTP API Gateway # Output description
+    Value: !Sub "https://${BingoApi}.execute-api.${AWS::Region}.amazonaws.com" # Constructed API URL
+  BingoTableName: # Exported DynamoDB table name
+    Description: Name of the primary DynamoDB table # Output description
+    Value: !Ref BingoTable # Reference to DynamoDB table resource
+  SwapAlertsTopicArn: # Exported SNS topic ARN
+    Description: ARN of the vehicle swap alert SNS topic # Output description
+    Value: !Ref SwapAlertsTopic # Reference to SNS topic resource

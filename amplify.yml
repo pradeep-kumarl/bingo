@@ -1,0 +1,19 @@
+version: 1 # Declare Amplify build specification version 1
+applications: # Configure monorepo application deployments
+  - appRoot: apps/gov-web # Root directory for the government dashboard Next.js app
+    frontend: # Frontend build settings and pipeline definition
+      phases: # Build lifecycle phase definitions
+        preBuild: # Commands executed before application compilation
+          commands: # List of pre-build shell commands
+            - npm ci # Perform clean npm install using package-lock.json
+        build: # Commands executed to compile and build application
+          commands: # List of build shell commands
+            - npm run build # Execute Next.js optimized production build
+      artifacts: # Specify generated output artifacts to deploy
+        baseDirectory: .next # Target the Next.js production output directory
+        files: # Define artifact inclusion patterns
+          - '**/*' # Include all generated files and static assets
+      cache: # Cache configuration to optimize future CI/CD build speeds
+        paths: # List of directories to preserve between build runs
+          - node_modules/**/* # Cache npm dependencies to speed up future installs
+          - .next/cache/**/* # Cache Next.js compiler output for fast incremental builds

@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.expo/
+dist/
+build/
+.env
+.env.*
+!.env.example
+.aws-sam/
+.venv/
+__pycache__/
+*.apk
+.DS_Store
