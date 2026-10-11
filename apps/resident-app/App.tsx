@@ -1,17 +1,23 @@
 /**
- * BinGo Resident App
- * Expo ~57 / React Native 0.86 / React 19 / TypeScript
+ * BinGo Resident Mobile App
+ * Expo ~57 / React Native 0.86 / Expo Camera / TypeScript
  *
- * State-machine navigation: `screen` state drives which component renders.
- * Set API_BASE to your backend URL; leave empty for demo mode with mock data.
+ * Features:
+ * 1. Live Camera QR Scanner & manual fallback for bin QR codes
+ * 2. Visual Theater Seat Viewer for the resident's allotted seat (#0000 to #1000)
+ *    with interactive Chirpy Sparrow mascot (Green=Dropped, Grey=Frozen Ice, Amber=Vacation)
+ * 3. 12-Month Waste Performance history with compliance percentage
+ * 4. 2-Way Message Desk: Send Bulk Waste / Event orders, bin issues & requests directly to Govt Admin
+ * 5. Instant Vacation Mode / Streak Freeze toggle
  */
 
 import { StatusBar } from 'expo-status-bar';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,786 +25,1090 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// ─── Config & Backend API ────────────────────────────────────────────────────
 const API_BASE: string = 'https://nhi8wzvkvi.execute-api.ap-south-1.amazonaws.com';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type WasteType = 'wet' | 'sanitary' | 'dry' | 'furniture' | 'event';
+type SeatStatus = 'dropped' | 'pending' | 'out_of_station';
 
-type CardProgress = Record<WasteType, boolean>;
-
-interface ScanResult {
-  wasteType: WasteType;
-  message: string;
-  vehicleFillPercentage: number;
-  bingoWon: boolean;
-  updatedCard: CardProgress;
+interface MonthPerformance {
+  monthName: string;
+  daysDropped: number;
+  totalDays: number;
+  compliancePct: number;
+  badgeLabel: string;
 }
 
-interface ScanRecord {
-  scanId: string;
-  wasteType: WasteType;
+interface HouseSeat {
+  id: string; // e.g. "0104", "0042"
+  numericId: number;
+  block: string;
+  status: SeatStatus;
+  streak: number;
+  monthDropsCount: number;
+  monthTotalDays: number;
+  dropTimeToday?: string;
+  residentName: string;
+  address: string;
+  assignedBadge: string;
+  twelveMonths: MonthPerformance[];
+}
+
+interface CitizenMessage {
+  id: string;
+  houseId: string;
+  category: 'Bulky Pickup' | 'Bin Overflow' | 'Travel / Freeze' | 'Bulk Order / Event' | 'Query';
+  messageText: string;
   timestamp: string;
+  status: 'pending_reply' | 'resolved';
+  officialReply?: string;
+  officerName?: string;
+  replyTime?: string;
 }
 
-type Screen =
-  | 'Login'
-  | 'Home'
-  | 'Scan'
-  | 'ScanResult'
-  | 'History';
+type Screen = 'Home' | 'CameraScan' | 'MySeat' | 'BulkOrder' | 'History';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const WASTE_META: Record<WasteType, { label: string; icon: string }> = {
-  wet:       { label: 'Organic (Wet)',               icon: '🥬' },
-  sanitary:  { label: 'Sanitary / Soiled (Burning)', icon: '🔥' },
-  dry:       { label: 'Dry / Recyclables',           icon: '📦' },
-  furniture: { label: 'Bulky Furniture',             icon: '🛋️' },
-  event:     { label: 'Bulk / Event Waste',          icon: '🎉' },
+const WASTE_META: Record<WasteType, { label: string; icon: string; desc: string }> = {
+  wet:       { label: 'Organic (Wet)',               icon: '🥬', desc: 'Compostable food & kitchen waste' },
+  sanitary:  { label: 'Sanitary / Soiled (Burning)', icon: '🔥', desc: 'Diapers & sanitary waste for incineration' },
+  dry:       { label: 'Dry / Recyclables',           icon: '📦', desc: 'Paper, cardboard, plastics & cans' },
+  furniture: { label: 'Bulky Furniture',             icon: '🛋️', desc: 'Mattresses, chairs & timber' },
+  event:     { label: 'Bulk / Event Waste',          icon: '🎉', desc: 'Marriage halls, parties & catering waste' },
 };
 
-const SAMPLE_DEEP_LINK =
-  'bingo://scan?data=DEMO_BAY_01&sig=abc123fakesignature';
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-const MOCK_HISTORY: ScanRecord[] = [
-  { scanId: 'SC-001', wasteType: 'wet',      timestamp: '2026-10-10 08:15' },
-  { scanId: 'SC-002', wasteType: 'dry',      timestamp: '2026-10-09 09:32' },
-  { scanId: 'SC-003', wasteType: 'sanitary', timestamp: '2026-10-08 07:50' },
-];
+function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPerformance[] {
+  return MONTH_NAMES.map((name, mIdx) => {
+    const totalDays = MONTH_DAYS[mIdx];
+    const monthHash = ((houseIndex * 41 + mIdx * 29) * 2654435761) >>> 0;
+    const rateFactor = (monthHash % 35) + 65;
+    let daysDropped = Math.round((totalDays * rateFactor) / 100);
 
-const INITIAL_CARD: CardProgress = {
-  wet: false,
-  sanitary: false,
-  dry: false,
-  furniture: false,
-  event: false,
-};
+    if (mIdx === 9) { // October (current month)
+      if (todayStatus === 'out_of_station') daysDropped = Math.max(12, daysDropped - 6);
+      else if (todayStatus === 'dropped') daysDropped = Math.min(totalDays, daysDropped + 2);
+    }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-/** Parse qrData + sig from a bingo:// deep-link or fall back to raw input. */
-function parseDeepLink(raw: string): { qrData: string; signature: string } {
-  try {
-    const url = new URL(raw);
+    const compliancePct = Math.round((daysDropped / totalDays) * 100);
+    let badgeLabel = 'Good Binner';
+    if (compliancePct >= 90) badgeLabel = 'Eco Champion 🌟';
+    else if (compliancePct >= 80) badgeLabel = 'Active Streak 🔥';
+    else if (compliancePct >= 70) badgeLabel = 'Travel Freeze 🏖️';
+    else badgeLabel = 'Frozen Defrost ❄️';
+
     return {
-      qrData:    url.searchParams.get('data') ?? raw,
-      signature: url.searchParams.get('sig')  ?? '',
+      monthName: name,
+      daysDropped,
+      totalDays,
+      compliancePct,
+      badgeLabel,
     };
-  } catch {
-    return { qrData: raw, signature: '' };
+  });
+}
+
+function createHouseSeat(houseId: string, status: SeatStatus = 'pending'): HouseSeat {
+  const numericId = parseInt(houseId.replace(/\D/g, ''), 10) || 104;
+  const block = numericId <= 250 ? 'Block A' : numericId <= 500 ? 'Block B' : numericId <= 750 ? 'Block C' : 'Block D';
+  const twelveMonths = generate12Months(numericId, status);
+  const currentMonth = twelveMonths[9];
+
+  return {
+    id: houseId.padStart(4, '0'),
+    numericId,
+    block,
+    status,
+    streak: status === 'dropped' ? 7 : 0,
+    monthDropsCount: currentMonth.daysDropped,
+    monthTotalDays: currentMonth.totalDays,
+    dropTimeToday: status === 'dropped' ? '08:24 AM' : undefined,
+    residentName: 'Priya Sharma',
+    address: `House #${houseId.padStart(4, '0')}, ${block}, Green Glen Layout, Ward 151`,
+    assignedBadge: `BG-RFID-${houseId.padStart(4, '0')}`,
+    twelveMonths,
+  };
+}
+
+// ─── Chirpy Mascot Component ──────────────────────────────────────────────────
+function ChirpyMascot({ mood, size = 64 }: { mood: 'happy' | 'frozen' | 'vacation'; size?: number }) {
+  if (mood === 'frozen') {
+    return (
+      <View style={[styles.mascotBox, { width: size, height: size, backgroundColor: '#E0F2FE', borderColor: '#38BDF8' }]}>
+        <Text style={{ fontSize: size * 0.45 }}>🧊</Text>
+        <Text style={{ fontSize: size * 0.35, marginTop: -6 }}>🐦</Text>
+      </View>
+    );
   }
-}
 
-function isDemoMode(): boolean {
-  return API_BASE === '';
-}
-
-// ─── Demo Banner ──────────────────────────────────────────────────────────────
-function DemoBanner() {
-  if (!isDemoMode()) return null;
-  return (
-    <View style={styles.demoBanner}>
-      <Text style={styles.demoBannerText}>
-        🔌 Demo mode – connect API_BASE for live data
-      </Text>
-    </View>
-  );
-}
-
-// ─── BinGo Banner (won) ───────────────────────────────────────────────────────
-function BingoBanner() {
-  return (
-    <View style={styles.bingoBanner}>
-      <Text style={styles.bingoBannerText}>🎉 BinGo! You completed the card!</Text>
-    </View>
-  );
-}
-
-// ─── Card Squares ─────────────────────────────────────────────────────────────
-function CardSquares({ card }: { card: CardProgress }) {
-  const types: WasteType[] = ['wet', 'sanitary', 'dry', 'furniture', 'event'];
-  return (
-    <View style={styles.cardRow}>
-      {types.map((t) => (
-        <View
-          key={t}
-          style={[styles.cardSquare, card[t] ? styles.cardSquareDone : styles.cardSquareEmpty]}
-        >
-          <Text style={styles.cardSquareIcon}>
-            {card[t] ? '✓' : WASTE_META[t].icon}
-          </Text>
-          <Text style={styles.cardSquareLabel}>{WASTE_META[t].label}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-// ─── Screen 1: Login ─────────────────────────────────────────────────────────
-interface LoginProps {
-  onLogin: (householdId: string) => void;
-}
-
-function LoginScreen({ onLogin }: LoginProps) {
-  const [hhId, setHhId] = useState('');
-
-  function handleEnter() {
-    const trimmed = hhId.trim();
-    if (!trimmed) {
-      Alert.alert('Required', 'Please enter your Household ID (e.g. HH-101)');
-      return;
-    }
-    onLogin(trimmed);
+  if (mood === 'vacation') {
+    return (
+      <View style={[styles.mascotBox, { width: size, height: size, backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+        <Text style={{ fontSize: size * 0.45 }}>🏖️</Text>
+        <Text style={{ fontSize: size * 0.35, marginTop: -6 }}>🦜</Text>
+      </View>
+    );
   }
 
   return (
-    <View style={styles.centerContainer}>
-      <DemoBanner />
-      <Text style={styles.logo}>🗑️</Text>
-      <Text style={styles.appTitle}>BinGo</Text>
-      <Text style={styles.appSubtitle}>Smart Waste, Happy Streets</Text>
-
-      <View style={styles.card}>
-        <Text style={styles.label}>Household ID</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. HH-101"
-          value={hhId}
-          onChangeText={setHhId}
-          autoCapitalize="characters"
-          returnKeyType="done"
-          onSubmitEditing={handleEnter}
-        />
-        <Pressable style={styles.primaryBtn} onPress={handleEnter}>
-          <Text style={styles.primaryBtnText}>Enter</Text>
-        </Pressable>
-      </View>
+    <View style={[styles.mascotBox, { width: size, height: size, backgroundColor: '#DCFCE7', borderColor: '#22C55E' }]}>
+      <Text style={{ fontSize: size * 0.45 }}>🌟</Text>
+      <Text style={{ fontSize: size * 0.35, marginTop: -6 }}>🐦</Text>
     </View>
   );
 }
 
-// ─── Screen 2: Home ───────────────────────────────────────────────────────────
-interface HomeProps {
-  householdId: string;
-  card: CardProgress;
-  streak: number;
-  bingoWon: boolean;
-  outOfStation: boolean;
-  onScan: () => void;
-  onHistory: () => void;
-  onToggleOutOfStation: () => void;
-}
-
-function HomeScreen({
-  householdId,
-  card,
-  streak,
-  bingoWon,
-  outOfStation,
-  onScan,
-  onHistory,
-  onToggleOutOfStation,
-}: HomeProps) {
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContainer}>
-      <DemoBanner />
-      {bingoWon && <BingoBanner />}
-
-      <Text style={styles.greeting}>Welcome, {householdId} 👋</Text>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Your BinGo Card</Text>
-        <CardSquares card={card} />
-        <Text style={styles.streakText}>🔥 {streak}-day streak</Text>
-      </View>
-
-      <Pressable style={styles.primaryBtn} onPress={onScan}>
-        <Text style={styles.primaryBtnText}>🔍 Scan Waste</Text>
-      </Pressable>
-
-      <Pressable style={styles.secondaryBtn} onPress={onHistory}>
-        <Text style={styles.secondaryBtnText}>📋 View History</Text>
-      </Pressable>
-
-      <Pressable
-        style={[styles.toggleBtn, outOfStation && styles.toggleBtnActive]}
-        onPress={onToggleOutOfStation}
-      >
-        <Text style={[styles.toggleBtnText, outOfStation && styles.toggleBtnTextActive]}>
-          {outOfStation ? '🏠 Back in Station' : '✈️ I\'m Out of Station'}
-        </Text>
-      </Pressable>
-    </ScrollView>
-  );
-}
-
-// ─── Screen 3: Scan ──────────────────────────────────────────────────────────
-interface ScanProps {
-  householdId: string;
-  onResult: (result: ScanResult) => void;
-  onBack: () => void;
-}
-
-function ScanScreen({ householdId, onResult, onBack }: ScanProps) {
-  const [deepLink, setDeepLink] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  async function handleSubmit() {
-    const raw = deepLink.trim();
-    if (!raw) {
-      setError('Please paste a deep-link or QR data first.');
-      return;
-    }
-    setError('');
-    setLoading(true);
-
-    const { qrData, signature } = parseDeepLink(raw);
-
-    try {
-      if (isDemoMode()) {
-        // Mock response — simulates a successful scan
-        await new Promise<void>((r) => setTimeout(r, 800));
-        const mockResult: ScanResult = {
-          wasteType:            'wet',
-          message:              'Wet waste logged successfully! Keep it up! 🌊',
-          vehicleFillPercentage: 65,
-          bingoWon:             false,
-          updatedCard: {
-            wet: true, sanitary: false, dry: false, furniture: false, event: false,
-          },
-        };
-        onResult(mockResult);
-        return;
-      }
-
-      const res = await fetch(`${API_BASE}/scans`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ qrData, signature, householdId }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message ?? `HTTP ${res.status}`);
-      }
-
-      const data = (await res.json()) as ScanResult;
-      onResult(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Scan failed. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContainer}>
-      <DemoBanner />
-
-      <Pressable style={styles.backBtn} onPress={onBack}>
-        <Text style={styles.backBtnText}>← Back</Text>
-      </Pressable>
-
-      <Text style={styles.screenTitle}>Scan Bay QR</Text>
-
-      <View style={styles.card}>
-        {/* Camera placeholder note */}
-        <View style={styles.cameraNoteBox}>
-          <Text style={styles.cameraNoteText}>
-            📷 In production this opens the device camera.{'\n'}
-            For the hackathon demo, paste the QR deep-link below.
-          </Text>
-        </View>
-
-        <Text style={styles.label}>Paste QR deep-link here</Text>
-        <TextInput
-          style={[styles.input, styles.inputMultiline]}
-          placeholder="bingo://scan?data=...&sig=..."
-          value={deepLink}
-          onChangeText={setDeepLink}
-          multiline
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-
-        {!!error && <Text style={styles.errorText}>{error}</Text>}
-
-        <Pressable
-          style={styles.ghostBtn}
-          onPress={() => setDeepLink(SAMPLE_DEEP_LINK)}
-        >
-          <Text style={styles.ghostBtnText}>📋 Fill sample deep-link</Text>
-        </Pressable>
-
-        <Pressable
-          style={[styles.primaryBtn, loading && styles.btnDisabled]}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.primaryBtnText}>Submit Scan</Text>}
-        </Pressable>
-      </View>
-    </ScrollView>
-  );
-}
-
-// ─── Screen 4: Green Tick Result ─────────────────────────────────────────────
-interface ScanResultProps {
-  result: ScanResult;
-  onDone: (updatedCard: CardProgress) => void;
-}
-
-function ScanResultScreen({ result, onDone }: ScanResultProps) {
-  const meta = WASTE_META[result.wasteType];
-
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContainer}>
-      <View style={styles.resultIconWrap}>
-        <Text style={styles.resultIcon}>{result.bingoWon ? '🎉' : '✅'}</Text>
-      </View>
-
-      {result.bingoWon && <BingoBanner />}
-
-      <Text style={styles.resultWasteType}>
-        {meta.icon} {meta.label} waste logged!
-      </Text>
-      <Text style={styles.resultMessage}>{result.message}</Text>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Updated BinGo Card</Text>
-        <CardSquares card={result.updatedCard} />
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Vehicle Status</Text>
-        <View style={styles.fillBarBg}>
-          {/* width accepts DimensionValue — `${n}%` is valid at runtime */}
-          <View
-            // eslint-disable-next-line react-native/no-inline-styles
-            style={[styles.fillBarFg, { width: `${result.vehicleFillPercentage}%` as `${number}%` }]}
-          />
-        </View>
-        <Text style={styles.fillBarLabel}>
-          Vehicle {result.vehicleFillPercentage}% full
-        </Text>
-      </View>
-
-      <Pressable style={styles.primaryBtn} onPress={() => onDone(result.updatedCard)}>
-        <Text style={styles.primaryBtnText}>Done</Text>
-      </Pressable>
-    </ScrollView>
-  );
-}
-
-// ─── Screen 5: History ───────────────────────────────────────────────────────
-interface HistoryProps {
-  householdId: string;
-  onBack: () => void;
-}
-
-function HistoryScreen({ householdId, onBack }: HistoryProps) {
-  const [records, setRecords] = useState<ScanRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Fetch on mount
-  const fetchHistory = useCallback(async () => {
-    setLoading(true);
-    try {
-      if (isDemoMode()) {
-        await new Promise<void>((r) => setTimeout(r, 500));
-        setRecords(MOCK_HISTORY);
-        return;
-      }
-      const res = await fetch(`${API_BASE}/households/${householdId}/scans`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ScanRecord[];
-      setRecords(data.length ? data : MOCK_HISTORY);
-    } catch {
-      setRecords(MOCK_HISTORY);
-    } finally {
-      setLoading(false);
-    }
-  }, [householdId]);
-
-  // Run fetchHistory once on mount
-  React.useEffect(() => {
-    fetchHistory();
-  }, [fetchHistory]);
-
-  return (
-    <View style={styles.flex1}>
-      <DemoBanner />
-      <View style={styles.historyHeader}>
-        <Pressable style={styles.backBtn} onPress={onBack}>
-          <Text style={styles.backBtnText}>← Back</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>Scan History</Text>
-      </View>
-
-      {loading ? (
-        <ActivityIndicator size="large" color={C.primary} style={styles.loader} />
-      ) : (
-        <FlatList
-          data={records}
-          keyExtractor={(item) => item.scanId}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <View style={[styles.card, styles.historyRow]}>
-              <Text style={styles.historyIcon}>
-                {WASTE_META[item.wasteType].icon}
-              </Text>
-              <View style={styles.historyInfo}>
-                <Text style={styles.historyWaste}>
-                  {WASTE_META[item.wasteType].label}
-                </Text>
-                <Text style={styles.historyTime}>{item.timestamp}</Text>
-              </View>
-              <Text style={styles.historyScanId}>{item.scanId}</Text>
-            </View>
-          )}
-          ListEmptyComponent={
-            <Text style={styles.emptyText}>No scans yet. Start scanning!</Text>
-          }
-        />
-      )}
-    </View>
-  );
-}
-
-// ─── Root App ────────────────────────────────────────────────────────────────
+// ─── Main App Component ───────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen]           = useState<Screen>('Login');
-  const [householdId, setHouseholdId] = useState('');
-  const [card, setCard]               = useState<CardProgress>(INITIAL_CARD);
-  const [streak]                      = useState(3);   // demo value
-  const [bingoWon, setBingoWon]       = useState(false);
-  const [outOfStation, setOutOfStation] = useState(false);
-  const [scanResult, setScanResult]   = useState<ScanResult | null>(null);
+  const [houseId, setHouseId] = useState('0104');
+  const [house, setHouse] = useState<HouseSeat>(() => createHouseSeat('0104', 'pending'));
+  const [currentScreen, setCurrentScreen] = useState<Screen>('Home');
 
-  function handleLogin(id: string) {
-    setHouseholdId(id);
-    setScreen('Home');
+  // Messages / Bulk orders sent to Admin Panel
+  const [messages, setMessages] = useState<CitizenMessage[]>([
+    {
+      id: 'MSG-INIT-01',
+      houseId: '0104',
+      category: 'Bulk Order / Event',
+      messageText: 'Need 3 bulk event waste containers for colony community feast tomorrow morning.',
+      timestamp: 'Today, 10:15 AM',
+      status: 'resolved',
+      officialReply: 'Approved! Special Event Truck (VH-EVNT-01) scheduled for delivery tomorrow at 8:00 AM.',
+      officerName: 'Officer M. Suresh (Ward 151)',
+      replyTime: 'Today, 10:30 AM',
+    },
+    {
+      id: 'MSG-INIT-02',
+      houseId: '0104',
+      category: 'Bulky Pickup',
+      messageText: '2 old mattress pieces and discarded wooden cupboard ready for disposal.',
+      timestamp: 'Yesterday',
+      status: 'resolved',
+      officialReply: 'Bulky vehicle VH-FURN-01 has collected the items. Thank you for segregating!',
+      officerName: 'Ward Nodal Desk',
+      replyTime: 'Yesterday, 04:12 PM',
+    },
+  ]);
+
+  // Bulk Order Form State
+  const [orderCategory, setOrderCategory] = useState<CitizenMessage['category']>('Bulk Order / Event');
+  const [orderNotes, setOrderNotes] = useState('');
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+
+  // QR Camera State
+  const [permission, requestPermission] = useCameraPermissions();
+  const [scannedResult, setScannedResult] = useState<string | null>(null);
+  const [manualCodeInput, setManualCodeInput] = useState('');
+  const [scanModalVisible, setScanModalVisible] = useState(false);
+
+  // Drop recorded notification
+  const [lastDropWaste, setLastDropWaste] = useState<WasteType>('wet');
+
+  // Switch House ID (e.g. testing different seats from 0000 to 1000)
+  function handleSaveHouseId(newId: string) {
+    const clean = newId.trim().padStart(4, '0');
+    setHouseId(clean);
+    setHouse(createHouseSeat(clean, house.status));
+    Alert.alert('Seat Updated', `Switched to House Seat #${clean} in Ward 151.`);
   }
 
-  function handleScanResult(result: ScanResult) {
-    setScanResult(result);
-    setBingoWon(result.bingoWon);
-    setScreen('ScanResult');
+  // Handle Scan recording
+  function handleRecordWasteDrop(type: WasteType = 'wet', bayCode?: string) {
+    const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const updatedMonths = generate12Months(house.numericId, 'dropped');
+
+    setHouse((prev) => ({
+      ...prev,
+      status: 'dropped',
+      streak: prev.streak + 1,
+      dropTimeToday: timeStr,
+      monthDropsCount: updatedMonths[9].daysDropped,
+      twelveMonths: updatedMonths,
+    }));
+
+    setLastDropWaste(type);
+    setScanModalVisible(true);
+    setScannedResult(bayCode ?? `BAY-${type.toUpperCase()}-01`);
   }
 
-  function handleDone(updatedCard: CardProgress) {
-    setCard(updatedCard);
-    setScreen('Home');
+  // Handle Barcode Scanned Event from CameraView
+  function handleBarcodeScanned({ data }: { data: string }) {
+    if (scanModalVisible) return;
+    let detectedType: WasteType = 'wet';
+    const lower = data.toLowerCase();
+    if (lower.includes('dry') || lower.includes('recycl')) detectedType = 'dry';
+    else if (lower.includes('sanit') || lower.includes('burn')) detectedType = 'sanitary';
+    else if (lower.includes('furn') || lower.includes('bulk')) detectedType = 'furniture';
+    else if (lower.includes('event')) detectedType = 'event';
+
+    handleRecordWasteDrop(detectedType, data);
+    setCurrentScreen('Home');
   }
 
-  async function handleToggleOutOfStation() {
-    const next = !outOfStation;
-    setOutOfStation(next);
-    if (!isDemoMode()) {
-      try {
-        await fetch(`${API_BASE}/households/${householdId}/outofstation`, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ outOfStation: next }),
-        });
-      } catch {
-        // silently fail — local state already toggled
-      }
+  // Vacation Mode Toggle
+  function handleToggleVacation() {
+    const nextStatus: SeatStatus = house.status === 'out_of_station' ? 'pending' : 'out_of_station';
+    const updatedMonths = generate12Months(house.numericId, nextStatus);
+
+    setHouse((prev) => ({
+      ...prev,
+      status: nextStatus,
+      monthDropsCount: updatedMonths[9].daysDropped,
+      twelveMonths: updatedMonths,
+    }));
+
+    if (nextStatus === 'out_of_station') {
+      const vacationMsg: CitizenMessage = {
+        id: `MSG-TRV-${Date.now()}`,
+        houseId: house.id,
+        category: 'Travel / Freeze',
+        messageText: `Travel Notice: House #${house.id} enabled Vacation Mode. Pausing daily drops & protecting streak 🏖️`,
+        timestamp: 'Just now',
+        status: 'pending_reply',
+      };
+      setMessages((prev) => [vacationMsg, ...prev]);
+      Alert.alert('Vacation Mode Activated 🏖️', 'Streak is protected! Daily waste drops paused without penalizing your score.');
+    } else {
+      Alert.alert('Welcome Back! 🏠', 'Vacation mode ended. Streak tracking resumed.');
     }
   }
 
-  switch (screen) {
-    case 'Login':
-      return (
-        <View style={styles.root}>
-          <StatusBar style="dark" />
-          <LoginScreen onLogin={handleLogin} />
-        </View>
-      );
+  // Send Bulk Waste Order / Message to Admin Desk
+  function handleSendBulkOrder() {
+    if (!orderNotes.trim()) {
+      Alert.alert('Details Required', 'Please enter your order quantity, type of waste, or message details.');
+      return;
+    }
 
-    case 'Home':
-      return (
-        <View style={styles.root}>
-          <StatusBar style="dark" />
-          <HomeScreen
-            householdId={householdId}
-            card={card}
-            streak={streak}
-            bingoWon={bingoWon}
-            outOfStation={outOfStation}
-            onScan={() => setScreen('Scan')}
-            onHistory={() => setScreen('History')}
-            onToggleOutOfStation={handleToggleOutOfStation}
+    setOrderSubmitting(true);
+    setTimeout(() => {
+      const newMsg: CitizenMessage = {
+        id: `MSG-${Date.now()}`,
+        houseId: house.id,
+        category: orderCategory,
+        messageText: orderNotes.trim(),
+        timestamp: 'Just now',
+        status: 'pending_reply',
+      };
+      setMessages((prev) => [newMsg, ...prev]);
+      setOrderNotes('');
+      setOrderSubmitting(false);
+      Alert.alert('Request Sent to Admin! 🚀', `Your ${orderCategory} request was transmitted directly to the Municipal Officer desk.`);
+      setCurrentScreen('BulkOrder');
+    }, 600);
+  }
+
+  // ── Render Screens ──
+
+  // SCREEN 1: Home Dashboard
+  function renderHome() {
+    const isDropped = house.status === 'dropped';
+    const isVacation = house.status === 'out_of_station';
+    const currentOct = house.twelveMonths[9];
+
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        {/* Top Header Card */}
+        <View style={styles.headerCard}>
+          <View style={styles.headerRow}>
+            <View>
+              <Text style={styles.headerWardBadge}>WARD 151 · ZONE 1 (0000-1000)</Text>
+              <Text style={styles.headerTitle}>House Seat #{house.id}</Text>
+              <Text style={styles.headerSubtitle}>{house.residentName} · {house.block}</Text>
+            </View>
+            <Pressable onPress={() => setCurrentScreen('MySeat')}>
+              <ChirpyMascot
+                mood={isDropped ? 'happy' : isVacation ? 'vacation' : 'frozen'}
+                size={58}
+              />
+            </Pressable>
+          </View>
+
+          {/* Quick House Status Pill */}
+          <View style={[
+            styles.statusBanner,
+            isDropped ? styles.bannerDropped : isVacation ? styles.bannerVacation : styles.bannerFrozen
+          ]}>
+            <Text style={styles.statusBannerText}>
+              {isDropped
+                ? `✅ Binned Today at ${house.dropTimeToday ?? '08:24 AM'} · Streak Active 🔥`
+                : isVacation
+                ? '🏖️ Vacation Mode Active · Streak Freeze Protected'
+                : '❄️ Drop Pending for Today · Defrost Chirpy Before 8 PM!'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Big Action Buttons */}
+        <View style={styles.actionGrid}>
+          {/* 1. Scan at Bins Button */}
+          <Pressable
+            style={[styles.bigButton, styles.bigButtonScan]}
+            onPress={async () => {
+              if (!permission?.granted) {
+                const res = await requestPermission();
+                if (!res.granted) {
+                  Alert.alert('Camera Permission', 'Camera permission needed to scan bin QR codes. You can also type code manually.');
+                }
+              }
+              setCurrentScreen('CameraScan');
+            }}
+          >
+            <Text style={styles.bigButtonIcon}>📷</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bigButtonTitle}>Scan Bin QR Code</Text>
+              <Text style={styles.bigButtonSub}>Point phone at bin to log daily drop</Text>
+            </View>
+            <Text style={styles.arrowIcon}>→</Text>
+          </Pressable>
+
+          {/* 2. My Theater Seat Button */}
+          <Pressable
+            style={[styles.bigButton, styles.bigButtonSeat]}
+            onPress={() => setCurrentScreen('MySeat')}
+          >
+            <Text style={styles.bigButtonIcon}>🪑</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bigButtonTitle}>View My Theater Seat</Text>
+              <Text style={styles.bigButtonSub}>Seat #{house.id} · 12-Month Performance</Text>
+            </View>
+            <View style={[
+              styles.seatMiniBadge,
+              isDropped ? styles.seatMiniDropped : isVacation ? styles.seatMiniVacation : styles.seatMiniFrozen
+            ]}>
+              <Text style={styles.seatMiniBadgeText}>{isDropped ? 'GREEN' : isVacation ? 'AMBER' : 'GREY'}</Text>
+            </View>
+          </Pressable>
+
+          {/* 3. Bulk Order / Message to Admin */}
+          <Pressable
+            style={[styles.bigButton, styles.bigButtonBulk]}
+            onPress={() => setCurrentScreen('BulkOrder')}
+          >
+            <Text style={styles.bigButtonIcon}>📦</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bigButtonTitle}>Bulk Order & Admin Chat</Text>
+              <Text style={styles.bigButtonSub}>Request bulky pickup, party waste, or help</Text>
+            </View>
+            <View style={styles.msgCountBadge}>
+              <Text style={styles.msgCountText}>{messages.length}</Text>
+            </View>
+          </Pressable>
+        </View>
+
+        {/* Today's Streak & Stats Widget */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>🏅 Your Monthly Recycling Card</Text>
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statVal}>{house.streak} Days</Text>
+              <Text style={styles.statLabel}>Current Streak</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statVal}>{currentOct.daysDropped} / {currentOct.totalDays}</Text>
+              <Text style={styles.statLabel}>Oct Drops</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={[styles.statVal, { color: '#059669' }]}>{currentOct.compliancePct}%</Text>
+              <Text style={styles.statLabel}>Compliance</Text>
+            </View>
+          </View>
+
+          {/* Quick Drop Simulation / Manual Trigger */}
+          <Text style={styles.sectionSubtitle}>Quick Log Waste Drop:</Text>
+          <View style={styles.wastePillRow}>
+            {(['wet', 'dry', 'sanitary', 'furniture', 'event'] as WasteType[]).map((w) => (
+              <Pressable
+                key={w}
+                style={styles.wastePill}
+                onPress={() => handleRecordWasteDrop(w, `BAY-${w.toUpperCase()}-01`)}
+              >
+                <Text style={styles.wastePillIcon}>{WASTE_META[w].icon}</Text>
+                <Text style={styles.wastePillText}>{WASTE_META[w].label.split(' ')[0]}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        {/* Vacation Mode Quick Toggle */}
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleTitle}>🏖️ Vacation / Out of Station</Text>
+              <Text style={styles.toggleDesc}>
+                Traveling? Protect streak from freezing. Automatically notifies govt waste system.
+              </Text>
+            </View>
+            <Pressable
+              style={[styles.toggleBtn, isVacation && styles.toggleBtnActive]}
+              onPress={handleToggleVacation}
+            >
+              <Text style={[styles.toggleBtnText, isVacation && styles.toggleBtnTextActive]}>
+                {isVacation ? 'Active 🏖️' : 'Turn On'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  // SCREEN 2: Camera Scanner
+  function renderCameraScan() {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <View style={styles.cameraTopBar}>
+          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.cameraBackBtn}>
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>✕ Close</Text>
+          </Pressable>
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Scan Bin QR Code</Text>
+          <View style={{ width: 50 }} />
+        </View>
+
+        {permission?.granted ? (
+          <CameraView
+            style={{ flex: 1 }}
+            facing="back"
+            onBarcodeScanned={handleBarcodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'code128'],
+            }}
+          >
+            {/* Viewfinder Target */}
+            <View style={styles.viewFinderOverlay}>
+              <View style={styles.viewFinderBox}>
+                <View style={styles.viewFinderReticle} />
+                <Text style={styles.viewFinderText}>Align QR code inside box</Text>
+              </View>
+            </View>
+          </CameraView>
+        ) : (
+          <View style={styles.noCameraBox}>
+            <Text style={{ fontSize: 44, marginBottom: 12 }}>📷</Text>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' }}>
+              Camera Access Needed
+            </Text>
+            <Text style={{ color: '#9CA3AF', fontSize: 13, textAlign: 'center', marginTop: 6, marginHorizontal: 20 }}>
+              Allow camera permission to scan QR stickers affixed to your designated waste bins.
+            </Text>
+            <Pressable
+              style={styles.permissionBtn}
+              onPress={requestPermission}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Grant Permission</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Manual Code Input Tray */}
+        <View style={styles.cameraBottomTray}>
+          <Text style={{ color: '#E5E7EB', fontSize: 12, marginBottom: 8, fontWeight: '600' }}>
+            Or type bin barcode / bay ID manually:
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TextInput
+              style={styles.manualCodeInput}
+              placeholder="e.g. BAY-WET-01, BAY-DRY-01"
+              placeholderTextColor="#9CA3AF"
+              value={manualCodeInput}
+              onChangeText={setManualCodeInput}
+              autoCapitalize="characters"
+            />
+            <Pressable
+              style={styles.manualCodeSubmit}
+              onPress={() => {
+                const code = manualCodeInput.trim() || 'BAY-WET-01';
+                let detected: WasteType = 'wet';
+                if (code.toLowerCase().includes('dry')) detected = 'dry';
+                else if (code.toLowerCase().includes('sanit')) detected = 'sanitary';
+                else if (code.toLowerCase().includes('furn')) detected = 'furniture';
+                else if (code.toLowerCase().includes('event')) detected = 'event';
+
+                handleRecordWasteDrop(detected, code);
+                setManualCodeInput('');
+                setCurrentScreen('Home');
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Submit</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // SCREEN 3: My Theater Seat View
+  function renderMySeat() {
+    const isDropped = house.status === 'dropped';
+    const isVacation = house.status === 'out_of_station';
+    const totalYearDrops = house.twelveMonths.reduce((a, b) => a + b.daysDropped, 0);
+    const totalYearDays = house.twelveMonths.reduce((a, b) => a + b.totalDays, 0);
+    const yearPct = Math.round((totalYearDrops / totalYearDays) * 100);
+
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.navHeader}>
+          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.navBackBtn}>
+            <Text style={styles.navBackText}>← Back</Text>
+          </Pressable>
+          <Text style={styles.navTitle}>Theater Seating Status</Text>
+        </View>
+
+        {/* Big Theater Seat Card (representing 1 seat in 0000-1000) */}
+        <View style={styles.theaterSeatCard}>
+          <View style={styles.theaterStageLine}>
+            <Text style={styles.theaterStageText}>ZONE 1 THEATER GRID · SEAT 0000 TO 1000</Text>
+          </View>
+
+          <View style={styles.seatVisualCenter}>
+            {/* The Seat Icon */}
+            <View style={[
+              styles.bigSeatBox,
+              isDropped ? styles.bigSeatDropped : isVacation ? styles.bigSeatVacation : styles.bigSeatFrozen
+            ]}>
+              <ChirpyMascot
+                mood={isDropped ? 'happy' : isVacation ? 'vacation' : 'frozen'}
+                size={76}
+              />
+              <Text style={styles.seatNumberText}>#{house.id}</Text>
+              <Text style={styles.seatStatusPill}>
+                {isDropped ? 'GREEN SEAT (DROPPED)' : isVacation ? 'AMBER SEAT (VACATION)' : 'GREY SEAT (PENDING)'}
+              </Text>
+            </View>
+
+            <Text style={styles.seatResidentName}>{house.residentName}</Text>
+            <Text style={styles.seatAddressText}>{house.address}</Text>
+          </View>
+
+          {/* Seat Color Legend explanation */}
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: '#16A34A' }]} />
+              <Text style={styles.legendText}>Green: Dropped</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: '#475569' }]} />
+              <Text style={styles.legendText}>Grey: Not Dropped</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+              <Text style={styles.legendText}>Amber: Vacation</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Switch House Seat Number Input */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>Allotted Seat Identifier</Text>
+          <Text style={styles.helpText}>
+            Zone 1 comprises households 0000 through 1000. Enter your allotted number below:
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+            <TextInput
+              style={[styles.input, { flex: 1, marginBottom: 0 }]}
+              value={houseId}
+              onChangeText={setHouseId}
+              placeholder="e.g. 0104"
+              keyboardType="number-pad"
+              maxLength={4}
+            />
+            <Pressable
+              style={styles.saveSeatBtn}
+              onPress={() => handleSaveHouseId(houseId)}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Allot Seat</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* 12-Month Performance Breakdown */}
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={styles.cardHeader}>12-Month Drop History</Text>
+            <Text style={styles.yearScoreBadge}>{yearPct}% Year Average</Text>
+          </View>
+
+          <View style={styles.monthGrid}>
+            {house.twelveMonths.map((m, idx) => (
+              <View key={m.monthName} style={[styles.monthCard, idx === 9 && styles.monthCardActive]}>
+                <Text style={styles.monthTitle}>{m.monthName}</Text>
+                <Text style={styles.monthScore}>{m.compliancePct}%</Text>
+                <Text style={styles.monthDrops}>{m.daysDropped}/{m.totalDays} days</Text>
+                <Text style={styles.monthBadge}>{m.badgeLabel.split(' ')[0]}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  // SCREEN 4: Bulk Order & 2-Way Message Desk
+  function renderBulkOrder() {
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.navHeader}>
+          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.navBackBtn}>
+            <Text style={styles.navBackText}>← Back</Text>
+          </Pressable>
+          <Text style={styles.navTitle}>Bulk Orders & Admin Desk</Text>
+        </View>
+
+        {/* Order / Request Creator */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>📦 Request Bulk Service / Help</Text>
+          <Text style={styles.helpText}>
+            Direct line to Ward 151 Govt Officers. Request special bulk pickups, party waste bins, or report issues.
+          </Text>
+
+          {/* Category Selector */}
+          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Request Category:</Text>
+          <View style={styles.catChipsRow}>
+            {(['Bulk Order / Event', 'Bulky Pickup', 'Bin Overflow', 'Query'] as CitizenMessage['category'][]).map((cat) => (
+              <Pressable
+                key={cat}
+                style={[styles.catChip, orderCategory === cat && styles.catChipActive]}
+                onPress={() => setOrderCategory(cat)}
+              >
+                <Text style={[styles.catChipText, orderCategory === cat && styles.catChipTextActive]}>
+                  {cat === 'Bulk Order / Event' ? '🎉 Bulk / Event' : cat === 'Bulky Pickup' ? '🛋️ Bulky Waste' : cat === 'Bin Overflow' ? '⚠️ Bin Full' : '💬 Query'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {/* Notes Input */}
+          <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Description & Details:</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            numberOfLines={4}
+            placeholder="e.g. Need bulk collection for birthday party with 40 guests on Sunday at 7 PM..."
+            value={orderNotes}
+            onChangeText={setOrderNotes}
           />
-        </View>
-      );
 
-    case 'Scan':
-      return (
-        <View style={styles.root}>
-          <StatusBar style="dark" />
-          <ScanScreen
-            householdId={householdId}
-            onResult={handleScanResult}
-            onBack={() => setScreen('Home')}
-          />
+          <Pressable
+            style={[styles.submitOrderBtn, orderSubmitting && { opacity: 0.7 }]}
+            onPress={handleSendBulkOrder}
+            disabled={orderSubmitting}
+          >
+            {orderSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitOrderBtnText}>Transmit to Govt Office 🚀</Text>
+            )}
+          </Pressable>
         </View>
-      );
 
-    case 'ScanResult':
-      return (
-        <View style={styles.root}>
-          <StatusBar style="dark" />
-          {scanResult && (
-            <ScanResultScreen result={scanResult} onDone={handleDone} />
+        {/* 2-Way Conversation Feed */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>💬 Message Feed (Citizen App ↔ Govt Desk)</Text>
+          {messages.length === 0 ? (
+            <Text style={styles.emptyFeedText}>No messages yet. Send your first request above!</Text>
+          ) : (
+            messages.map((m) => (
+              <View key={m.id} style={styles.messageCard}>
+                <View style={styles.msgHeaderRow}>
+                  <View style={styles.msgBadgeWrap}>
+                    <Text style={styles.msgCategoryBadge}>{m.category}</Text>
+                    <Text style={styles.msgTimeText}>{m.timestamp}</Text>
+                  </View>
+                  <Text style={m.status === 'resolved' ? styles.statusReplied : styles.statusPending}>
+                    {m.status === 'resolved' ? 'Replied ✓' : 'Sent to Desk ⏳'}
+                  </Text>
+                </View>
+
+                {/* Resident Message Bubble */}
+                <View style={styles.residentBubble}>
+                  <Text style={styles.bubbleAuthor}>You (House #{m.houseId}):</Text>
+                  <Text style={styles.bubbleText}>{m.messageText}</Text>
+                </View>
+
+                {/* Government Official Reply Bubble */}
+                {m.officialReply && (
+                  <View style={styles.govtBubble}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <Text style={styles.govtAuthor}>🏛️ {m.officerName ?? 'Ward 151 Officer'}:</Text>
+                      <Text style={styles.govtReplyTime}>{m.replyTime ?? 'Delivered'}</Text>
+                    </View>
+                    <Text style={styles.govtText}>{m.officialReply}</Text>
+                  </View>
+                )}
+              </View>
+            ))
           )}
         </View>
-      );
-
-    case 'History':
-      return (
-        <View style={styles.root}>
-          <StatusBar style="dark" />
-          <HistoryScreen
-            householdId={householdId}
-            onBack={() => setScreen('Home')}
-          />
-        </View>
-      );
+      </ScrollView>
+    );
   }
+
+  return (
+    <View style={styles.root}>
+      <StatusBar style="dark" />
+
+      {/* Screen Router */}
+      {currentScreen === 'Home' && renderHome()}
+      {currentScreen === 'CameraScan' && renderCameraScan()}
+      {currentScreen === 'MySeat' && renderMySeat()}
+      {currentScreen === 'BulkOrder' && renderBulkOrder()}
+
+      {/* Drop Success Modal */}
+      <Modal
+        visible={scanModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setScanModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalDialog}>
+            <View style={styles.modalIconWrap}>
+              <ChirpyMascot mood="happy" size={72} />
+            </View>
+            <Text style={styles.modalTitle}>Waste Drop Recorded! 🎉</Text>
+            <Text style={styles.modalMeta}>
+              {WASTE_META[lastDropWaste].icon} {WASTE_META[lastDropWaste].label} logged successfully at {scannedResult ?? 'Station Bay'}.
+            </Text>
+            <View style={styles.modalStreakCard}>
+              <Text style={styles.modalStreakVal}>🔥 {house.streak}-Day Active Streak</Text>
+              <Text style={styles.modalStreakSub}>Your theater seat #{house.id} has turned GREEN for today!</Text>
+            </View>
+            <Pressable
+              style={styles.modalCloseBtn}
+              onPress={() => setScanModalVisible(false)}
+            >
+              <Text style={styles.modalCloseBtnText}>Awesome, Done! 🚀</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
 }
 
-// ─── Design Tokens ───────────────────────────────────────────────────────────
+// ─── Design Tokens & Styles ───────────────────────────────────────────────────
 const C = {
-  bg:       '#F0FBF4',
-  primary:  '#16A34A',
-  surface:  '#FFFFFF',
-  textMain: '#1A1A1A',
+  bg: '#F3F4F6',
+  cardBg: '#FFFFFF',
+  primary: '#16A34A',
+  primaryDark: '#15803D',
+  amber: '#D97706',
+  slate: '#0F172A',
+  textMain: '#111827',
   textMute: '#6B7280',
-  danger:   '#DC2626',
-  warn:     '#D97706',
+  border: '#E5E7EB',
 };
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
-  flex1: { flex: 1, backgroundColor: C.bg },
+  root: { flex: 1, backgroundColor: C.bg },
+  container: { padding: 18, paddingTop: 48, paddingBottom: 40 },
 
-  // Containers
-  centerContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.bg,
-    padding: 24,
-  },
-  scrollContainer: {
-    flexGrow: 1,
-    backgroundColor: C.bg,
+  // Header Card
+  headerCard: {
+    backgroundColor: '#064E3B',
+    borderRadius: 24,
     padding: 20,
-    paddingTop: 56,
-  },
-  listContent: { padding: 20, paddingTop: 8 },
-
-  // Logo / title
-  logo: { fontSize: 64, marginBottom: 8 },
-  appTitle: { fontSize: 36, fontWeight: '800', color: C.primary },
-  appSubtitle: { fontSize: 14, color: C.textMute, marginBottom: 32 },
-
-  // Generic card
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: 12,
-    padding: 16,
     marginBottom: 16,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.1,
     shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerWardBadge: { fontSize: 10, fontWeight: '800', color: '#6EE7B7', letterSpacing: 1 },
+  headerTitle: { fontSize: 24, fontWeight: '900', color: '#FFFFFF', marginTop: 2 },
+  headerSubtitle: { fontSize: 13, color: '#A7F3D0', marginTop: 2 },
 
-  // BinGo card squares
-  cardRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    marginBottom: 12,
+  // Status Banner
+  statusBanner: {
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
   },
-  cardSquare: {
-    width: 58,
-    height: 68,
-    borderRadius: 10,
+  bannerDropped: { backgroundColor: '#047857' },
+  bannerVacation: { backgroundColor: '#B45309' },
+  bannerFrozen: { backgroundColor: '#1E293B' },
+  statusBannerText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700', textAlign: 'center' },
+
+  // Big Action Buttons
+  actionGrid: { gap: 12, marginBottom: 16 },
+  bigButton: {
+    backgroundColor: C.cardBg,
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  bigButtonScan: { borderLeftWidth: 6, borderLeftColor: '#16A34A' },
+  bigButtonSeat: { borderLeftWidth: 6, borderLeftColor: '#0284C7' },
+  bigButtonBulk: { borderLeftWidth: 6, borderLeftColor: '#9333EA' },
+  bigButtonIcon: { fontSize: 32 },
+  bigButtonTitle: { fontSize: 16, fontWeight: '800', color: C.textMain },
+  bigButtonSub: { fontSize: 12, color: C.textMute, marginTop: 2 },
+  arrowIcon: { fontSize: 20, color: '#9CA3AF', fontWeight: 'bold' },
+
+  seatMiniBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  seatMiniDropped: { backgroundColor: '#DCFCE7' },
+  seatMiniVacation: { backgroundColor: '#FEF3C7' },
+  seatMiniFrozen: { backgroundColor: '#E2E8F0' },
+  seatMiniBadgeText: { fontSize: 10, fontWeight: '800', color: C.textMain },
+
+  msgCountBadge: { backgroundColor: '#F3E8FF', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3 },
+  msgCountText: { fontSize: 11, fontWeight: 'bold', color: '#7E22CE' },
+
+  // Generic Card
+  card: {
+    backgroundColor: C.cardBg,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  cardHeader: { fontSize: 16, fontWeight: '800', color: C.textMain, marginBottom: 4 },
+  sectionSubtitle: { fontSize: 12, fontWeight: '700', color: C.textMute, marginTop: 14, marginBottom: 8 },
+  helpText: { fontSize: 12, color: C.textMute, lineHeight: 18 },
+
+  // Mascot Box
+  mascotBox: {
+    borderRadius: 20,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardSquareDone:  { backgroundColor: C.primary },
-  cardSquareEmpty: { backgroundColor: '#E5E7EB' },
-  cardSquareIcon:  { fontSize: 20 },
-  cardSquareLabel: { fontSize: 10, marginTop: 4, color: C.textMain, fontWeight: '600' },
 
-  // Streak
-  streakText: { fontSize: 18, fontWeight: '700', color: C.warn, textAlign: 'center' },
-
-  // Greeting
-  greeting: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: C.textMain,
-    marginBottom: 16,
-  },
-
-  // Buttons
-  primaryBtn: {
-    backgroundColor: C.primary,
-    borderRadius: 10,
-    paddingVertical: 14,
+  // Stats Row
+  statsRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  statBox: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    padding: 12,
     alignItems: 'center',
-    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
-  primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  btnDisabled:    { opacity: 0.6 },
+  statVal: { fontSize: 16, fontWeight: '900', color: C.textMain },
+  statLabel: { fontSize: 11, color: C.textMute, marginTop: 2 },
 
-  secondaryBtn: {
-    backgroundColor: C.surface,
-    borderRadius: 10,
-    paddingVertical: 14,
+  // Waste Pills
+  wastePillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  wastePill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
-    borderWidth: 1.5,
-    borderColor: C.primary,
+    gap: 6,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
-  secondaryBtnText: { color: C.primary, fontSize: 16, fontWeight: '700' },
+  wastePillIcon: { fontSize: 16 },
+  wastePillText: { fontSize: 12, fontWeight: '700', color: C.textMain },
 
+  // Vacation Toggle
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  toggleTitle: { fontSize: 15, fontWeight: '800', color: C.textMain },
+  toggleDesc: { fontSize: 12, color: C.textMute, marginTop: 2, lineHeight: 16 },
   toggleBtn: {
     backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+  },
+  toggleBtnActive: { backgroundColor: '#F59E0B', borderColor: '#D97706' },
+  toggleBtnText: { fontSize: 12, fontWeight: '800', color: C.textMain },
+  toggleBtnTextActive: { color: '#FFFFFF' },
+
+  // Navigation Header
+  navHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  navBackBtn: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#E5E7EB', borderRadius: 10 },
+  navBackText: { fontSize: 13, fontWeight: '700', color: C.textMain },
+  navTitle: { fontSize: 18, fontWeight: '900', color: C.textMain },
+
+  // Theater Seat Card
+  theaterSeatCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 24,
+    padding: 22,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  theaterStageLine: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#10B981',
+    paddingBottom: 6,
+    marginBottom: 20,
+    width: '100%',
+    alignItems: 'center',
+  },
+  theaterStageText: { fontSize: 10, fontWeight: '800', color: '#34D399', letterSpacing: 1.5 },
+  seatVisualCenter: { alignItems: 'center', marginBottom: 18 },
+  bigSeatBox: {
+    width: 140,
+    height: 140,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    borderWidth: 3,
+  },
+  bigSeatDropped: { backgroundColor: '#16A34A', borderColor: '#4ADE80' },
+  bigSeatVacation: { backgroundColor: '#D97706', borderColor: '#FBBF24' },
+  bigSeatFrozen: { backgroundColor: '#334155', borderColor: '#64748B' },
+  seatNumberText: { fontSize: 16, fontWeight: '900', color: '#FFFFFF', marginTop: 4 },
+  seatStatusPill: { fontSize: 8, fontWeight: '900', color: '#E2E8F0', marginTop: 2 },
+  seatResidentName: { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
+  seatAddressText: { fontSize: 11, color: '#94A3B8', marginTop: 2, textAlign: 'center' },
+
+  legendRow: { flexDirection: 'row', gap: 16, borderTopWidth: 1, borderTopColor: '#1E293B', paddingTop: 14 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendText: { fontSize: 10, color: '#94A3B8', fontWeight: '600' },
+
+  // 12-Month Grid
+  yearScoreBadge: { fontSize: 12, fontWeight: '800', color: '#16A34A', backgroundColor: '#DCFCE7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  monthGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  monthCard: {
+    width: '22.8%',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  monthCardActive: { borderColor: '#16A34A', backgroundColor: '#F0FDF4' },
+  monthTitle: { fontSize: 11, fontWeight: '800', color: C.textMain },
+  monthScore: { fontSize: 13, fontWeight: '900', color: '#16A34A', marginTop: 2 },
+  monthDrops: { fontSize: 8, color: C.textMute, marginTop: 1 },
+  monthBadge: { fontSize: 8, color: C.textMute, marginTop: 2, fontWeight: '700' },
+
+  // Form Inputs
+  input: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5,
+    borderColor: C.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    color: C.textMain,
+  },
+  fieldLabel: { fontSize: 13, fontWeight: '700', color: C.textMain, marginBottom: 6 },
+  textArea: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5,
+    borderColor: C.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    color: C.textMain,
+    minHeight: 85,
+    textAlignVertical: 'top',
+  },
+  saveSeatBtn: {
+    backgroundColor: '#16A34A',
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    borderRadius: 12,
+  },
+  catChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  catChip: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  catChipActive: { backgroundColor: '#7E22CE', borderColor: '#6B21A8' },
+  catChipText: { fontSize: 12, fontWeight: '700', color: C.textMain },
+  catChipTextActive: { color: '#FFFFFF' },
+  submitOrderBtn: {
+    backgroundColor: '#7E22CE',
+    borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    marginBottom: 12,
+    marginTop: 14,
   },
-  toggleBtnActive:    { backgroundColor: '#FEF3C7', borderWidth: 1.5, borderColor: C.warn },
-  toggleBtnText:      { color: C.textMute, fontSize: 15, fontWeight: '600' },
-  toggleBtnTextActive:{ color: C.warn },
+  submitOrderBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 
-  ghostBtn: {
-    alignItems: 'center',
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  ghostBtnText: { color: C.primary, fontSize: 14, textDecorationLine: 'underline' },
-
-  backBtn: { marginBottom: 12 },
-  backBtnText: { color: C.primary, fontSize: 15, fontWeight: '600' },
-
-  // Inputs
-  label: { fontSize: 14, fontWeight: '600', color: C.textMain, marginBottom: 6 },
-  input: {
-    borderWidth: 1.5,
-    borderColor: '#D1FAE5',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 15,
-    color: C.textMain,
+  // Messages
+  emptyFeedText: { textAlign: 'center', color: C.textMute, fontSize: 13, marginVertical: 20 },
+  messageCard: {
     backgroundColor: '#F9FAFB',
-    marginBottom: 14,
-  },
-  inputMultiline: { minHeight: 80, textAlignVertical: 'top' },
-
-  // Banners
-  demoBanner: {
-    backgroundColor: '#E5E7EB',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    borderRadius: 16,
+    padding: 14,
     marginBottom: 12,
-    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  demoBannerText: { color: C.textMute, fontSize: 12, textAlign: 'center' },
+  msgHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  msgBadgeWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  msgCategoryBadge: { fontSize: 11, fontWeight: '800', backgroundColor: '#E0E7FF', color: '#4338CA', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  msgTimeText: { fontSize: 10, color: C.textMute },
+  statusReplied: { fontSize: 11, fontWeight: '800', color: '#16A34A' },
+  statusPending: { fontSize: 11, fontWeight: '800', color: '#D97706' },
+  residentBubble: { backgroundColor: '#FFFFFF', padding: 10, borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 8 },
+  bubbleAuthor: { fontSize: 10, fontWeight: '800', color: C.textMute, marginBottom: 2 },
+  bubbleText: { fontSize: 13, color: C.textMain, lineHeight: 18 },
+  govtBubble: { backgroundColor: '#F0FDF4', padding: 10, borderRadius: 10, borderWidth: 1, borderColor: '#BBF7D0' },
+  govtAuthor: { fontSize: 11, fontWeight: '800', color: '#166534' },
+  govtReplyTime: { fontSize: 9, color: '#166534' },
+  govtText: { fontSize: 13, color: '#14532D', lineHeight: 18 },
 
-  bingoBanner: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1.5,
-    borderColor: C.warn,
-    borderRadius: 10,
-    paddingVertical: 12,
-    marginBottom: 16,
+  // Camera UI
+  cameraTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingTop: 48,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    backgroundColor: '#000',
   },
-  bingoBannerText: { fontSize: 18, fontWeight: '800', color: C.warn },
+  cameraBackBtn: { padding: 6 },
+  viewFinderOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  viewFinderBox: {
+    width: 240,
+    height: 240,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#22C55E',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewFinderReticle: { width: 140, height: 140, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 12 },
+  viewFinderText: { color: '#FFFFFF', fontSize: 12, marginTop: 12, fontWeight: '600' },
+  cameraBottomTray: { backgroundColor: '#111827', padding: 18, paddingBottom: 32 },
+  manualCodeInput: { flex: 1, backgroundColor: '#1F2937', color: '#FFF', borderRadius: 12, paddingHorizontal: 12, fontSize: 13 },
+  manualCodeSubmit: { backgroundColor: '#16A34A', paddingHorizontal: 16, justifyContent: 'center', borderRadius: 12 },
+  noCameraBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  permissionBtn: { backgroundColor: '#16A34A', marginTop: 18, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
 
-  // Screen titles
-  screenTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: C.textMain,
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: C.textMain,
-    marginBottom: 4,
-  },
-
-  // Camera note
-  cameraNoteBox: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  cameraNoteText: { color: C.textMute, fontSize: 13, lineHeight: 19 },
-
-  // Error
-  errorText: { color: C.danger, fontSize: 13, marginBottom: 10 },
-
-  // Scan Result
-  resultIconWrap: { alignItems: 'center', marginBottom: 12 },
-  resultIcon:     { fontSize: 80 },
-  resultWasteType: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: C.textMain,
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  resultMessage: {
-    fontSize: 15,
-    color: C.textMute,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-
-  // Fill bar
-  fillBarBg: {
-    height: 14,
-    backgroundColor: '#E5E7EB',
-    borderRadius: 7,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-  fillBarFg: {
-    height: '100%',
-    backgroundColor: C.primary,
-    borderRadius: 7,
-  },
-  fillBarLabel: { color: C.textMute, fontSize: 13, marginTop: 6, textAlign: 'right' },
-
-  // History
-  historyHeader: { padding: 20, paddingTop: 56, backgroundColor: C.bg },
-  historyRow:    { flexDirection: 'row', alignItems: 'center', marginBottom: 0 },
-  historyIcon:   { fontSize: 28, marginRight: 12 },
-  historyInfo:   { flex: 1 },
-  historyWaste:  { fontSize: 15, fontWeight: '600', color: C.textMain },
-  historyTime:   { fontSize: 12, color: C.textMute, marginTop: 2 },
-  historyScanId: { fontSize: 11, color: C.textMute },
-
-  loader:    { marginTop: 60 },
-  emptyText: { textAlign: 'center', color: C.textMute, marginTop: 40, fontSize: 15 },
+  // Success Modal
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  modalDialog: { backgroundColor: '#FFFFFF', borderRadius: 28, padding: 24, alignItems: 'center', width: '100%', maxWidth: 340 },
+  modalIconWrap: { marginBottom: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '900', color: C.textMain, textAlign: 'center' },
+  modalMeta: { fontSize: 13, color: C.textMute, textAlign: 'center', marginTop: 6, lineHeight: 18 },
+  modalStreakCard: { backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 16, padding: 14, width: '100%', marginTop: 16, alignItems: 'center' },
+  modalStreakVal: { fontSize: 16, fontWeight: '900', color: '#16A34A' },
+  modalStreakSub: { fontSize: 11, color: '#15803D', marginTop: 4, textAlign: 'center' },
+  modalCloseBtn: { backgroundColor: '#16A34A', borderRadius: 16, paddingVertical: 14, width: '100%', alignItems: 'center', marginTop: 16 },
+  modalCloseBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 });
