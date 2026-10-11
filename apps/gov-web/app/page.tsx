@@ -1715,13 +1715,11 @@ function TheaterSeatingGrid({
   isAdmin,
   onSelectHouse,
   selectedHouseId,
-  onDefrostBatch,
 }: {
   houses: HouseSeat[];
   isAdmin: boolean;
   onSelectHouse: (house: HouseSeat) => void;
   selectedHouseId: string | null;
-  onDefrostBatch: () => void;
 }) {
   const [filter, setFilter] = useState<"all" | "dropped" | "pending" | "out_of_station">("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1779,18 +1777,6 @@ function TheaterSeatingGrid({
                 {droppedCount} of {totalCount} Households Binned Today ({Math.round((droppedCount / totalCount) * 100)}% Zone Score)
               </p>
             </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                onDefrostBatch();
-                sfx.defrost();
-              }}
-              className="text-xs font-bold bg-amber-400 hover:bg-amber-300 text-amber-950 px-3.5 py-2 rounded-xl shadow cursor-pointer transition-transform active:scale-95 flex items-center gap-1.5"
-            >
-              <span>🪄</span> Defrost Reminder Ray (Unfreeze 10 Sparrows)
-            </button>
           </div>
         </div>
 
@@ -2221,24 +2207,6 @@ export default function GovDashboard() {
     setMessages((prev) => [newMsg, ...prev]);
   }
 
-  // Defrost 10 random frozen sparrows
-  function handleDefrostBatch() {
-    let count = 0;
-    setHouses((prev) =>
-      prev.map((h) => {
-        if (h.status === "pending" && count < 10) {
-          count++;
-          return {
-            ...h,
-            status: "dropped",
-            dropTimeToday: "Defrosted Now",
-          };
-        }
-        return h;
-      })
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -2460,7 +2428,6 @@ export default function GovDashboard() {
             isAdmin={isAdmin}
             onSelectHouse={(h) => setSelectedHouse(h)}
             selectedHouseId={selectedHouse?.id ?? null}
-            onDefrostBatch={handleDefrostBatch}
           />
         </section>
       </main>
