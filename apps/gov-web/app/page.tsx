@@ -89,31 +89,6 @@ class SoundEffects {
       // audio error
     }
   }
-
-  // Police siren / patrol chime
-  policeChime() {
-    if (!this.enabled) return;
-    try {
-      this.init();
-      if (!this.ctx) return;
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(440, now);
-      osc.frequency.setValueAtTime(880, now + 0.12);
-      osc.frequency.setValueAtTime(440, now + 0.24);
-      osc.frequency.setValueAtTime(880, now + 0.36);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.5);
-    } catch {
-      // audio error
-    }
-  }
 }
 
 const sfx = new SoundEffects();
@@ -173,32 +148,6 @@ export interface MonthPerformance {
   badgeLabel: string;
 }
 
-export interface PoliceCheckInReply {
-  id: string;
-  timestamp: string;
-  officerName: string;
-  badgeNumber: string;
-  patrolVehicle: string;
-  message: string;
-  lockStatus: "VERIFIED_LOCKED" | "ALL_CLEAR" | "PERIMETER_CHECKED";
-}
-
-export interface PolicePatrolRecord {
-  patrolId: string;
-  policeStation: string;
-  beatSector: string;
-  assignedVehicle: string;
-  officerInCharge: string;
-  officerRadioChannel?: string;
-  officerPhone?: string;
-  status: "AUTOMATED_DISPATCHED" | "PATROL_ACTIVE" | "VERIFIED_SAFE";
-  dispatchedTimestamp: string;
-  patrolLink: string;
-  vacationFrom: string;
-  vacationTo: string;
-  checkIns: PoliceCheckInReply[];
-}
-
 export interface HouseSeat {
   id: string; // "0000" to "1000"
   numericId: number;
@@ -213,7 +162,6 @@ export interface HouseSeat {
   address: string;
   assignedBadge: string;
   twelveMonths: MonthPerformance[];
-  policePatrol?: PolicePatrolRecord;
 }
 
 export interface MessageItem {
@@ -221,7 +169,7 @@ export interface MessageItem {
   houseId: string;
   residentName: string;
   phone?: string;
-  category: "Bulky Pickup" | "Bin Overflow" | "Travel / Freeze" | "Query" | "Police Patrol";
+  category: "Bulky Pickup" | "Bin Overflow" | "Travel / Freeze" | "Query";
   messageText: string;
   timestamp: string;
   status: "pending_reply" | "resolved";
@@ -345,51 +293,15 @@ const INITIAL_MESSAGES: MessageItem[] = [
     id: "MSG-104",
     houseId: "0000",
     residentName: "Priya Sharma",
-    category: "Police Patrol",
-    messageText: "Vacation Alert: Away till Oct 25. House locked. Requesting Hoysala Beat #4 physical padlock verification & night vigil check-ins.",
+    category: "Travel / Freeze",
+    messageText: "Vacation notice: Traveling away till Oct 25. House is in vacation mode. Please protect our Chirpy streak!",
     timestamp: "12 mins ago",
-    status: "pending_reply",
+    status: "resolved",
+    officialReply: "Streak Freeze approved, Priya! Chirpy is in Vacation Mode 🏖️. Enjoy your holiday!",
+    replyTime: "5 mins ago",
+    officerName: "Officer M. Suresh",
   },
 ];
-
-function createPolicePatrolRecord(houseId: string, residentName: string): PolicePatrolRecord {
-  const num = parseInt(houseId, 10) || 0;
-  const beatNum = (num % 6) + 1;
-  const vehicleNum = 8810 + (num % 40);
-  return {
-    patrolId: `KSP-BEAT${beatNum}-VAC-${houseId}`,
-    policeStation: "Koramangala Police Station (Ward 151 Beat)",
-    beatSector: `Beat #${beatNum} (Koramangala Sector)`,
-    assignedVehicle: `Hoysala Patrol KA-02-G-${vehicleNum}`,
-    officerInCharge: "Head Constable Suresh K. & PC Raghu",
-    officerRadioChannel: "KSP Hoysala VHF Ch-04 (Sector A)",
-    status: "PATROL_ACTIVE",
-    dispatchedTimestamp: "Today at 06:00 AM (Automated Link)",
-    patrolLink: `https://police.ksp.gov.in/patrol/ward151/beat${beatNum}/house-${houseId}`,
-    vacationFrom: "Oct 11, 2026",
-    vacationTo: "Oct 25, 2026",
-    checkIns: [
-      {
-        id: `CHK-${houseId}-1`,
-        timestamp: "02:15 AM (Night Vigil)",
-        officerName: "HC Suresh K.",
-        badgeNumber: "HC-4412",
-        patrolVehicle: `Hoysala ${beatNum}`,
-        message: "Perimeter check complete. Main gate padlock verified intact & porch lights on. 🛡️👮",
-        lockStatus: "VERIFIED_LOCKED",
-      },
-      {
-        id: `CHK-${houseId}-2`,
-        timestamp: "05:40 AM (Dawn Patrol Sweep)",
-        officerName: "PC Raghu",
-        badgeNumber: "PC-8891",
-        patrolVehicle: `Cheetah 0${beatNum}`,
-        message: "Morning drive-by completed. Compound secure, no anomalies detected. All clear! ✅",
-        lockStatus: "ALL_CLEAR",
-      },
-    ],
-  };
-}
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -474,7 +386,6 @@ function generateInitialHouses(): HouseSeat[] {
     const twelveMonths = generate12Months(i, status);
     const currentMonthData = twelveMonths[9];
     const name = INDIAN_NAMES[i % INDIAN_NAMES.length];
-    const policePatrol = status === "out_of_station" ? createPolicePatrolRecord(id, name) : undefined;
 
     houses.push({
       id,
@@ -489,7 +400,6 @@ function generateInitialHouses(): HouseSeat[] {
       address: `House #${id}, ${getBlockName(i)}, Green Glen Layout, Ward 151`,
       assignedBadge: `BG-RFID-${id}`,
       twelveMonths,
-      policePatrol,
     });
   }
 
@@ -779,23 +689,13 @@ function SeatDetailModal({
   onClose,
   onToggleStatus,
   onEditHouse,
-  onSendPoliceCheckIn,
 }: {
   house: HouseSeat;
   isAdmin: boolean;
   onClose: () => void;
   onToggleStatus: (newStatus: SeatStatus) => void;
   onEditHouse: () => void;
-  onSendPoliceCheckIn: (
-    houseId: string,
-    replyMessage: string,
-    lockStatus?: "VERIFIED_LOCKED" | "ALL_CLEAR" | "PERIMETER_CHECKED"
-  ) => void;
 }) {
-  const [policeInput, setPoliceInput] = useState("");
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [sentToast, setSentToast] = useState<string | null>(null);
-
   const totalYearDrops = house.twelveMonths.reduce((acc, m) => acc + m.daysDropped, 0);
   const totalYearDays = house.twelveMonths.reduce((acc, m) => acc + m.totalDays, 0);
   const yearPct = Math.round((totalYearDrops / totalYearDays) * 100);
@@ -811,17 +711,8 @@ function SeatDetailModal({
     house.status === "dropped"
       ? `Chirpy is thrilled! House #${house.id} has binned today! Streak is active with ${house.streak} continuous days!`
       : house.status === "out_of_station"
-      ? `Chirpy is on vacation! House #${house.id} is marked Out of Station with automated Police Beat Patrol security active!`
+      ? `Chirpy is on vacation! House #${house.id} is traveling with Streak Freeze protection active!`
       : `Brrr! House #${house.id} is frozen in an ice cube! Drop waste before 8 PM to defrost Chirpy!`;
-
-  function handleDispatchPoliceNote() {
-    if (!policeInput.trim()) return;
-    onSendPoliceCheckIn(house.id, policeInput.trim(), "VERIFIED_LOCKED");
-    setPoliceInput("");
-    setSentToast(`Patrol check-in sent directly to ${house.residentName}'s mobile app!`);
-    sfx.policeChime();
-    setTimeout(() => setSentToast(null), 3500);
-  }
 
   return (
     <div
@@ -850,8 +741,8 @@ function SeatDetailModal({
                   </span>
                 )}
                 {house.status === "out_of_station" && (
-                  <span className="text-[10px] bg-cyan-400 text-slate-950 font-bold px-2 py-0.5 rounded-full animate-pulse">
-                    🚓 Police Patrol Active
+                  <span className="text-[10px] bg-amber-400 text-amber-950 font-bold px-2 py-0.5 rounded-full">
+                    🏖️ Vacation Mode
                   </span>
                 )}
               </div>
@@ -878,7 +769,7 @@ function SeatDetailModal({
                   {house.status === "dropped"
                     ? "Happy Chirpy ✨"
                     : house.status === "out_of_station"
-                    ? "Vacation Chirpy 🏖️ (Police Protected)"
+                    ? "Vacation Chirpy 🏖️ (Streak Protected)"
                     : "Frozen Chirpy 🥶❄️"}
                 </span>
                 {house.streak > 0 && (
@@ -893,193 +784,47 @@ function SeatDetailModal({
             </div>
           </div>
 
-          {/* 🚓 Automated Police Beat Patrol Protection Hub */}
+          {/* Vacation Mode Status & Controls */}
           {house.status === "out_of_station" ? (
-            <div className="bg-slate-900 text-white border border-slate-700 rounded-3xl p-4.5 flex flex-col gap-3 shadow-md">
-              <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-2xl p-1 bg-white/10 rounded-xl">🚓</span>
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-cyan-300">
-                      Automated Police Beat Patrol Protection Active
-                    </h4>
-                    <p className="text-[11px] text-slate-300">
-                      House locked for travel · Linked to nearest beat patrolling unit
-                    </p>
-                  </div>
-                </div>
-                <span className="text-[10px] bg-emerald-500 text-white font-bold px-2.5 py-0.5 rounded-full animate-pulse">
-                  ● Beat Live
-                </span>
-              </div>
-
-              {/* Automated Dispatch Tracking Link */}
-              <div className="bg-slate-950/70 rounded-xl p-3 border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                <div className="flex flex-col min-w-0">
-                  <span className="text-[10px] uppercase font-bold text-cyan-400">
-                    Automated Patrol Link &amp; Sector Route:
-                  </span>
-                  <span className="text-xs font-mono text-cyan-200 truncate select-all">
-                    {house.policePatrol?.patrolLink ??
-                      `https://police.ksp.gov.in/patrol/ward151/beat4/house-${house.id}`}
-                  </span>
-                </div>
-                <button
-                  onClick={() => {
-                    const link =
-                      house.policePatrol?.patrolLink ??
-                      `https://police.ksp.gov.in/patrol/ward151/beat4/house-${house.id}`;
-                    navigator.clipboard?.writeText(link);
-                    setCopiedLink(true);
-                    setTimeout(() => setCopiedLink(false), 2000);
-                    sfx.chirp();
-                  }}
-                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs"
-                >
-                  {copiedLink ? "✓ Link Copied" : "📋 Copy Patrol Link"}
-                </button>
-              </div>
-
-              {/* Police Beat Details */}
-              <div className="grid grid-cols-2 gap-2 text-xs text-slate-200">
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl p-1 bg-white rounded-xl border border-amber-200 shadow-2xs">🏖️</span>
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Nearest Police Station:
-                  </span>
-                  <span className="font-semibold">
-                    {house.policePatrol?.policeStation ?? "Koramangala Police Station (Ward 151 Beat)"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Patrol Vehicle &amp; Sector:
-                  </span>
-                  <span className="font-semibold font-mono text-cyan-300">
-                    {house.policePatrol?.assignedVehicle ?? "Hoysala Patrol KA-02-G-8819"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Officers In-Charge:
-                  </span>
-                  <span className="font-semibold">
-                    {house.policePatrol?.officerInCharge ?? "HC Suresh K. & PC Raghu"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Beat Radio Frequency:
-                  </span>
-                  <span className="font-mono text-cyan-300">
-                    {house.policePatrol?.officerRadioChannel ?? "KSP Hoysala VHF Ch-04 (Sector A)"}
-                  </span>
+                  <h4 className="font-bold text-amber-950 text-sm">Vacation Mode Active (Streak Protected)</h4>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Household is traveling. Daily waste drops are paused and your Chirpy streak is frozen safe.
+                  </p>
                 </div>
               </div>
-
-              {/* Live Patrol Verification & Check-in Messages Sent Directly to App */}
-              <div className="mt-1 flex flex-col gap-2">
-                <span className="text-[11px] font-bold text-cyan-200 flex items-center justify-between">
-                  <span>👮 Patrol Updates Delivered Directly to Citizen App:</span>
-                  <span className="text-[10px] text-slate-400 font-normal">
-                    Real-time push to resident notification bar
-                  </span>
-                </span>
-
-                <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto pr-1">
-                  {(house.policePatrol?.checkIns ?? []).map((chk) => (
-                    <div
-                      key={chk.id}
-                      className="bg-slate-800/90 border border-slate-700 rounded-xl p-2.5 text-xs flex flex-col gap-1"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-cyan-300 flex items-center gap-1.5">
-                          <span>🛡️</span> {chk.officerName} ({chk.patrolVehicle})
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {chk.timestamp}
-                        </span>
-                      </div>
-                      <p className="text-slate-100 text-xs leading-relaxed">{chk.message}</p>
-                      <div className="flex items-center justify-between text-[10px] text-emerald-400 font-bold border-t border-slate-700/60 pt-1 mt-0.5">
-                        <span>✓ Verified Safe &amp; Delivered to App</span>
-                        <span className="font-mono text-slate-400">{chk.badgeNumber}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Patrolling Police Officer Reply & Check-in Console */}
-                <div className="bg-slate-950/80 rounded-2xl p-3 border border-slate-700/80 flex flex-col gap-2 mt-1">
-                  <label className="text-[11px] font-bold text-cyan-300 flex items-center justify-between">
-                    <span>Officer Patrol Check-in Reply to Resident App:</span>
-                    <span className="text-[10px] text-slate-400">Pushes directly to resident citizen app</span>
-                  </label>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      "Main gate padlock verified intact 🛡️",
-                      "Night vigil 02:30 AM: All clear & premises secure ✅",
-                      "Compound & windows inspected, no issues 🌙",
-                      "Dawn patrol drive-by completed 🚓",
-                    ].map((preset) => (
-                      <button
-                        key={preset}
-                        onClick={() => setPoliceInput(preset)}
-                        className="text-[10px] bg-slate-800 hover:bg-slate-700 text-cyan-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-                      >
-                        {preset}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={policeInput}
-                      onChange={(e) => setPoliceInput(e.target.value)}
-                      placeholder="Type patrol check-in note to resident app..."
-                      className="flex-1 text-xs p-2 bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 font-medium"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleDispatchPoliceNote();
-                      }}
-                    />
-                    <button
-                      onClick={handleDispatchPoliceNote}
-                      className="px-3.5 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black rounded-xl text-xs transition-colors cursor-pointer shadow flex items-center gap-1 shrink-0"
-                    >
-                      <span>Reply to App 🚓</span>
-                    </button>
-                  </div>
-
-                  {sentToast && (
-                    <p className="text-[11px] font-bold text-emerald-400 animate-pulse">
-                      ✓ {sentToast}
-                    </p>
-                  )}
-                </div>
-              </div>
+              <button
+                onClick={() => {
+                  onToggleStatus("pending");
+                  sfx.defrost();
+                }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
+              >
+                End Vacation Mode 🏠
+              </button>
             </div>
           ) : (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2.5">
-                <span className="text-2xl">🚓</span>
+                <span className="text-2xl">🏖️</span>
                 <div>
-                  <p className="font-bold text-amber-900">
-                    Automated Beat Police Patrol Link Integration
-                  </p>
+                  <p className="font-bold text-amber-900">Planning travel or holiday?</p>
                   <p className="text-[11px] text-amber-700">
-                    Marking Out of Station automatically triggers the Police Patrol link, assigning Hoysala Beat #4 for scheduled night vigils and verified lock check-in updates.
+                    Turn on Vacation Mode to protect your household's Chirpy streak while away.
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => {
                   onToggleStatus("out_of_station");
-                  sfx.policeChime();
+                  sfx.chirp();
                 }}
-                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
+                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
               >
-                Set Vacation &amp; Link Police 🏖️
+                Set Vacation Mode 🏖️
               </button>
             </div>
           )}
@@ -1228,7 +973,7 @@ function SeatDetailModal({
                 onClick={() => {
                   onToggleStatus(house.status === "out_of_station" ? "pending" : "out_of_station");
                   if (house.status !== "out_of_station") {
-                    sfx.policeChime();
+                    sfx.chirp();
                   }
                 }}
                 className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
@@ -1237,7 +982,7 @@ function SeatDetailModal({
                     : "bg-amber-500 text-white hover:bg-amber-600 shadow"
                 }`}
               >
-                {house.status === "out_of_station" ? "Remove Out of Station" : "Set Out of Station & Link Police (🏖️ 🚓)"}
+                {house.status === "out_of_station" ? "End Vacation Mode 🏠" : "Set Vacation Mode 🏖️"}
               </button>
             </div>
           </div>
@@ -1385,26 +1130,22 @@ function CitizenMessageBoard({
   onSelectMsgId,
   onReply,
   onNewMockMessage,
-  onPushVacationMode,
-  onSimulatePoliceCheckIn,
-  onVerifyPoliceTicket,
+  onSimulateTravelNotice,
 }: {
   messages: MessageItem[];
-  filterCategory: "all" | "police" | "waste";
-  onSelectCategory: (cat: "all" | "police" | "waste") => void;
+  filterCategory: "all" | "waste" | "travel";
+  onSelectCategory: (cat: "all" | "waste" | "travel") => void;
   selectedMsgId: string;
   onSelectMsgId: (id: string) => void;
   onReply: (messageId: string, replyText: string) => void;
   onNewMockMessage: () => void;
-  onPushVacationMode: () => void;
-  onSimulatePoliceCheckIn: () => void;
-  onVerifyPoliceTicket: (messageId: string, houseId: string) => void;
+  onSimulateTravelNotice: () => void;
 }) {
   const [replyInput, setReplyInput] = useState("");
 
   const filteredMessages = messages.filter((m) => {
-    if (filterCategory === "police") return m.category === "Police Patrol";
-    if (filterCategory === "waste") return m.category !== "Police Patrol";
+    if (filterCategory === "waste") return m.category === "Bulky Pickup" || m.category === "Bin Overflow";
+    if (filterCategory === "travel") return m.category === "Travel / Freeze";
     return true;
   });
 
@@ -1413,20 +1154,11 @@ function CitizenMessageBoard({
     filteredMessages[0] ||
     messages[0];
 
-  const pendingPoliceAlerts = messages.filter(
-    (m) => m.category === "Police Patrol" && m.status === "pending_reply"
-  );
-  const totalPoliceAlerts = messages.filter((m) => m.category === "Police Patrol").length;
-
   function handleSendReply() {
     if (!replyInput.trim() || !activeMsg) return;
     onReply(activeMsg.id, replyInput.trim());
     setReplyInput("");
-    if (activeMsg.category === "Police Patrol") {
-      sfx.policeChime();
-    } else {
-      sfx.messageChime();
-    }
+    sfx.messageChime();
   }
 
   return (
@@ -1443,7 +1175,7 @@ function CitizenMessageBoard({
             </span>
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            Residents submit requests via BinGo mobile app. Officers &amp; Beat Police reply directly back to citizen app.
+            Residents submit requests via BinGo mobile app. Municipal Officers reply directly back to citizen app.
           </p>
         </div>
 
@@ -1459,26 +1191,18 @@ function CitizenMessageBoard({
           </button>
           <button
             onClick={() => {
-              onPushVacationMode();
+              onSimulateTravelNotice();
+              sfx.chirp();
             }}
             className="text-xs font-bold bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-xl cursor-pointer transition-colors shrink-0 shadow-xs flex items-center gap-1.5"
           >
-            <span>🏖️</span> Push Vacation Mode (Auto-Alert Police)
-          </button>
-          <button
-            onClick={() => {
-              onSimulatePoliceCheckIn();
-            }}
-            className="text-xs font-bold bg-slate-900 text-cyan-200 hover:bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-xl cursor-pointer transition-colors shrink-0 shadow-xs flex items-center gap-1"
-          >
-            <span>🚓</span> + Simulate Beat Police Check-in
+            <span>🏖️</span> + Simulate Travel Notice
           </button>
         </div>
       </div>
 
-      {/* Filter Tabs - TAB 2 IS STRICTLY THE POLICE PATROL & VACATION VERIFICATION TAB */}
+      {/* Filter Tabs */}
       <div className="flex items-center gap-2 text-xs flex-wrap">
-        {/* Tab 1: All Community Feeds */}
         <button
           onClick={() => onSelectCategory("all")}
           className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all ${
@@ -1490,24 +1214,6 @@ function CitizenMessageBoard({
           All Community Feeds ({messages.length})
         </button>
 
-        {/* Tab 2: 🚓 Police Patrol & Vacation Verification (SECOND TAB) */}
-        <button
-          onClick={() => onSelectCategory("police")}
-          className={`px-3.5 py-1.5 rounded-xl font-bold cursor-pointer transition-all flex items-center gap-1.5 ${
-            filterCategory === "police"
-              ? "bg-slate-900 text-cyan-300 ring-2 ring-cyan-400 shadow-md"
-              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-          }`}
-        >
-          <span>🚓</span> Police Patrol &amp; Vacation Verification ({totalPoliceAlerts})
-          {pendingPoliceAlerts.length > 0 && (
-            <span className="bg-amber-400 text-amber-950 text-[10px] px-2 py-0.5 rounded-full font-black animate-pulse">
-              {pendingPoliceAlerts.length} Pending
-            </span>
-          )}
-        </button>
-
-        {/* Tab 3: Waste & Bulky Requests */}
         <button
           onClick={() => onSelectCategory("waste")}
           className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all ${
@@ -1516,7 +1222,18 @@ function CitizenMessageBoard({
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
         >
-          Waste &amp; Bulky Requests ({messages.filter((m) => m.category !== "Police Patrol").length})
+          Waste &amp; Bulky Requests ({messages.filter((m) => m.category === "Bulky Pickup" || m.category === "Bin Overflow").length})
+        </button>
+
+        <button
+          onClick={() => onSelectCategory("travel")}
+          className={`px-3.5 py-1.5 rounded-xl font-bold cursor-pointer transition-all flex items-center gap-1.5 ${
+            filterCategory === "travel"
+              ? "bg-amber-500 text-white shadow-xs"
+              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          }`}
+        >
+          <span>🏖️</span> Travel &amp; Freeze Notices ({messages.filter((m) => m.category === "Travel / Freeze").length})
         </button>
       </div>
 
@@ -1525,64 +1242,37 @@ function CitizenMessageBoard({
         <div className="flex flex-col gap-2 max-h-96 overflow-y-auto pr-1">
           {filteredMessages.map((m) => {
             const isSelected = m.id === selectedMsgId;
-            const isPolice = m.category === "Police Patrol";
             return (
               <div
                 key={m.id}
                 onClick={() => onSelectMsgId(m.id)}
                 className={`p-3 rounded-2xl border text-xs cursor-pointer transition-all ${
                   isSelected
-                    ? isPolice
-                      ? "bg-slate-900 text-white border-cyan-400 ring-2 ring-cyan-300/50 shadow-md"
-                      : "bg-emerald-50/80 border-emerald-400 ring-2 ring-emerald-200"
+                    ? "bg-emerald-50/80 border-emerald-400 ring-2 ring-emerald-200"
                     : "bg-white border-gray-200 hover:bg-gray-50"
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span
-                    className={`font-bold font-mono ${
-                      isSelected && isPolice ? "text-cyan-300" : "text-gray-900"
-                    }`}
-                  >
+                  <span className="font-bold font-mono text-gray-900">
                     House #{m.houseId}
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                       m.status === "resolved"
-                        ? isPolice
-                          ? "bg-cyan-400/20 text-cyan-300 border border-cyan-400/30"
-                          : "bg-green-100 text-green-800"
+                        ? "bg-green-100 text-green-800"
                         : "bg-amber-100 text-amber-800 animate-pulse border border-amber-300"
                     }`}
                   >
-                    {m.status === "resolved"
-                      ? isPolice
-                        ? "Verified & Safe ✓"
-                        : "Replied"
-                      : isPolice
-                      ? "Pending Verification 🛡️"
-                      : "Pending Reply"}
+                    {m.status === "resolved" ? "Replied ✓" : "Pending Reply"}
                   </span>
                 </div>
-                <p
-                  className={`font-semibold truncate ${
-                    isSelected && isPolice ? "text-slate-100" : "text-gray-800"
-                  }`}
-                >
+                <p className="font-semibold truncate text-gray-800">
                   {m.residentName}
                 </p>
-                <p
-                  className={`text-[11px] line-clamp-2 mt-0.5 ${
-                    isSelected && isPolice ? "text-slate-300" : "text-gray-500"
-                  }`}
-                >
+                <p className="text-[11px] line-clamp-2 mt-0.5 text-gray-500">
                   {m.messageText}
                 </p>
-                <div
-                  className={`flex justify-between items-center text-[10px] mt-2 ${
-                    isSelected && isPolice ? "text-slate-400" : "text-gray-400"
-                  }`}
-                >
+                <div className="flex justify-between items-center text-[10px] mt-2 text-gray-400">
                   <span className="font-semibold">{m.category}</span>
                   <span>{m.timestamp}</span>
                 </div>
@@ -1616,86 +1306,32 @@ function CitizenMessageBoard({
               {/* Resident Message Bubble */}
               <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-2xs mb-4">
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                  Citizen Request / Vacation Notice:
+                  Citizen Request / Travel Notice:
                 </p>
                 <p className="text-xs text-gray-800 leading-relaxed font-medium">
                   "{activeMsg.messageText}"
                 </p>
               </div>
 
-              {/* 🚓 Verification Protocol Box for Pending Police Vacation Alerts */}
-              {activeMsg.category === "Police Patrol" && activeMsg.status === "pending_reply" && (
-                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-400 rounded-2xl p-4 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                  <div className="flex items-start gap-3">
-                    <span className="text-3xl p-1 bg-white rounded-xl shadow-2xs border border-amber-300">🚓</span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-black uppercase tracking-wider text-amber-950">
-                          Beat Police Patrol Lock Verification Required
-                        </span>
-                        <span className="text-[10px] bg-amber-400 text-amber-950 font-bold px-2 py-0.5 rounded-full animate-pulse">
-                          Awaiting Hoysala Beat Check
-                        </span>
-                      </div>
-                      <p className="text-xs text-amber-900 mt-1 font-medium leading-relaxed">
-                        Citizen has locked premises for travel. Beat officer can physically verify padlock &amp; perimeter, then send instant verification check-in to citizen app.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      onVerifyPoliceTicket(activeMsg.id, activeMsg.houseId);
-                    }}
-                    className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-400 font-black rounded-xl text-xs transition-all shadow-md cursor-pointer shrink-0 flex items-center gap-1.5 hover:scale-102 active:scale-98"
-                  >
-                    <span>🛡️</span> Verify Padlock &amp; Send Check-in to App
-                  </button>
-                </div>
-              )}
-
-              {/* Existing Reply / Verification Status if any */}
+              {/* Existing Reply if any */}
               {activeMsg.officialReply && (
-                <div
-                  className={`rounded-2xl p-4 shadow-2xs mb-4 border ${
-                    activeMsg.category === "Police Patrol"
-                      ? "bg-slate-900 text-white border-slate-700"
-                      : "bg-emerald-50 border-emerald-200"
-                  }`}
-                >
+                <div className="rounded-2xl p-4 shadow-2xs mb-4 border bg-emerald-50 border-emerald-200">
                   <div className="flex items-center justify-between mb-1">
-                    <span
-                      className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                        activeMsg.category === "Police Patrol"
-                          ? "text-cyan-300"
-                          : "text-emerald-900"
-                      }`}
-                    >
-                      <span>{activeMsg.category === "Police Patrol" ? "🚓" : "👮"}</span>
-                      {activeMsg.officerName} (Delivered Directly to Citizen App)
+                    <span className="text-[11px] font-bold flex items-center gap-1.5 text-emerald-900">
+                      <span>👮</span> {activeMsg.officerName} (Delivered Directly to Citizen App)
                     </span>
-                    <span
-                      className={`text-[10px] font-mono ${
-                        activeMsg.category === "Police Patrol"
-                          ? "text-slate-400"
-                          : "text-emerald-700"
-                      }`}
-                    >
+                    <span className="text-[10px] font-mono text-emerald-700">
                       {activeMsg.replyTime}
                     </span>
                   </div>
-                  <p
-                    className={`text-xs font-medium ${
-                      activeMsg.category === "Police Patrol" ? "text-slate-100" : "text-emerald-950"
-                    }`}
-                  >
+                  <p className="text-xs font-medium text-emerald-950">
                     {activeMsg.officialReply}
                   </p>
                 </div>
               )}
             </div>
 
-            {/* Officer / Police Reply Box */}
+            {/* Officer Reply Box */}
             <div className="bg-white border border-gray-200 rounded-2xl p-3 flex flex-col gap-2">
               <label className="text-[11px] font-bold text-gray-700 flex items-center justify-between">
                 <span>Direct Reply to Resident's App:</span>
@@ -1704,20 +1340,12 @@ function CitizenMessageBoard({
 
               {/* Quick Preset Buttons */}
               <div className="flex flex-wrap gap-1.5 mb-1">
-                {(activeMsg.category === "Police Patrol"
-                  ? [
-                      "Main gate padlock verified intact 🛡️",
-                      "Night vigil 02:30 AM: All clear & premises secure ✅",
-                      "Compound & windows inspected, no issues 🌙",
-                      "Dawn patrol drive-by completed 🚓",
-                    ]
-                  : [
-                      "Vehicle Dispatched 🚛",
-                      "Streak Freeze Approved 🏖️ (Police Linked)",
-                      "Confirmed for Tomorrow Morning ✅",
-                      "Please drop at Bay 1 hopper before 2 PM 🥬",
-                    ]
-                ).map((txt) => (
+                {[
+                  "Vehicle Dispatched 🚛",
+                  "Streak Freeze Approved 🏖️",
+                  "Confirmed for Tomorrow Morning ✅",
+                  "Please drop at Bay 1 hopper before 2 PM 🥬",
+                ].map((txt) => (
                   <button
                     key={txt}
                     onClick={() => setReplyInput(txt)}
@@ -1733,11 +1361,7 @@ function CitizenMessageBoard({
                   type="text"
                   value={replyInput}
                   onChange={(e) => setReplyInput(e.target.value)}
-                  placeholder={
-                    activeMsg.category === "Police Patrol"
-                      ? "Type police patrol check-in reply to resident app..."
-                      : "Type official response to this household..."
-                  }
+                  placeholder="Type official response to resident app..."
                   className="flex-1 text-xs p-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleSendReply();
@@ -1999,7 +1623,7 @@ function TheaterSeatingGrid({
                         isDropped
                           ? `Binned at ${h.dropTimeToday ?? "Today"}`
                           : isOutOfStation
-                          ? "Vacation / Out of Station (Police Beat Link Active 🚓)"
+                          ? "Vacation / Out of Station (Streak Protected 🏖️)"
                           : "Frozen Streak (Drop Pending)"
                       }`}
                       className={`relative w-8 h-8 sm:w-9 sm:h-9 rounded-md flex flex-col items-center justify-center transition-all duration-150 cursor-pointer select-none ${
@@ -2055,7 +1679,7 @@ export default function GovDashboard() {
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [now, setNow] = useState<Date | null>(null);
-  const [boardCategory, setBoardCategory] = useState<"all" | "police" | "waste">("all");
+  const [boardCategory, setBoardCategory] = useState<"all" | "waste" | "travel">("all");
   const [selectedMsgId, setSelectedMsgId] = useState<string>("MSG-104");
 
   useEffect(() => {
@@ -2111,23 +1735,20 @@ export default function GovDashboard() {
           const updatedMonths = generate12Months(h.numericId, newStatus);
           const currentMonthData = updatedMonths[9];
 
-          let policePatrol = h.policePatrol;
           if (newStatus === "out_of_station") {
-            policePatrol = createPolicePatrolRecord(h.id, h.residentName);
-            const newPoliceMsg: MessageItem = {
-              id: `MSG-POL-${Date.now()}`,
+            const newNotice: MessageItem = {
+              id: `MSG-TRV-${Date.now()}`,
               houseId: h.id,
               residentName: h.residentName,
-              category: "Police Patrol",
-              messageText: `Vacation Alert: House #${h.id} (${h.residentName}, ${h.block}) enabled Vacation Mode via citizen app. Automated beat patrol alert dispatched — awaiting Hoysala Beat #4 physical padlock verification.`,
+              category: "Travel / Freeze",
+              messageText: `Travel Notice: House #${h.id} (${h.residentName}, ${h.block}) enabled Vacation Mode via citizen app. Daily waste collection paused with streak freeze protected 🏖️`,
               timestamp: "Just now",
               status: "pending_reply",
             };
-            setMessages((prevMsg) => [newPoliceMsg, ...prevMsg]);
-            // Automatically switch Government Board to Tab 2 (Police Patrol & Vacation Verification)!
-            setBoardCategory("police");
-            setSelectedMsgId(newPoliceMsg.id);
-            sfx.policeChime();
+            setMessages((prevMsg) => [newNotice, ...prevMsg]);
+            setBoardCategory("travel");
+            setSelectedMsgId(newNotice.id);
+            sfx.messageChime();
           }
 
           const updated: HouseSeat = {
@@ -2139,7 +1760,6 @@ export default function GovDashboard() {
                 : undefined,
             monthDropsCount: currentMonthData.daysDropped,
             twelveMonths: updatedMonths,
-            policePatrol,
           };
           setSelectedHouse(updated);
           return updated;
@@ -2149,7 +1769,7 @@ export default function GovDashboard() {
     );
   }
 
-  function handlePushVacationPoliceAlert(specificHouseId?: string) {
+  function handleSimulateTravelNotice(specificHouseId?: string) {
     const target = specificHouseId
       ? houses.find((h) => h.id === specificHouseId)
       : (selectedHouse || houses.find((h) => h.status !== "out_of_station") || houses[42]);
@@ -2158,14 +1778,12 @@ export default function GovDashboard() {
 
     const updatedMonths = generate12Months(target.numericId, "out_of_station");
     const currentMonthData = updatedMonths[9];
-    const patrolRecord = target.policePatrol ?? createPolicePatrolRecord(target.id, target.residentName);
 
     const updatedTarget: HouseSeat = {
       ...target,
       status: "out_of_station",
       monthDropsCount: currentMonthData.daysDropped,
       twelveMonths: updatedMonths,
-      policePatrol: patrolRecord,
     };
 
     setHouses((prev) => prev.map((h) => (h.id === target.id ? updatedTarget : h)));
@@ -2173,135 +1791,25 @@ export default function GovDashboard() {
       setSelectedHouse(updatedTarget);
     }
 
-    const newPoliceMsg: MessageItem = {
-      id: `MSG-POL-${Date.now()}`,
+    const newNotice: MessageItem = {
+      id: `MSG-TRV-${Date.now()}`,
       houseId: target.id,
       residentName: target.residentName,
-      category: "Police Patrol",
-      messageText: `Vacation Alert: House #${target.id} (${target.residentName}, ${target.block}) pushed Vacation Mode via citizen app. Automated beat patrol alert dispatched — awaiting Hoysala Beat #4 physical padlock verification.`,
+      category: "Travel / Freeze",
+      messageText: `Travel Notice: House #${target.id} (${target.residentName}, ${target.block}) activated Vacation Mode via citizen app. Daily waste drops paused & streak protected 🏖️`,
       timestamp: "Just now",
       status: "pending_reply",
     };
 
-    setMessages((prev) => [newPoliceMsg, ...prev]);
-    // Automatically switch Government Board to Tab 2 (Police Patrol & Vacation Verification)!
-    setBoardCategory("police");
-    setSelectedMsgId(newPoliceMsg.id);
-    sfx.policeChime();
+    setMessages((prev) => [newNotice, ...prev]);
+    setBoardCategory("travel");
+    setSelectedMsgId(newNotice.id);
+    sfx.messageChime();
 
     const boardEl = document.getElementById("citizen-message-board");
     if (boardEl) {
       boardEl.scrollIntoView({ behavior: "smooth" });
     }
-  }
-
-  function handleVerifyPoliceTicket(msgId: string, houseId: string) {
-    const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    const verifiedCheckIn: PoliceCheckInReply = {
-      id: `CHK-${houseId}-${Date.now()}`,
-      timestamp: timeStr,
-      officerName: "HC Suresh K.",
-      badgeNumber: "HC-4412",
-      patrolVehicle: "Hoysala 12",
-      message: `Perimeter & front gate padlock verified securely locked by Beat Officer HC Suresh K. (Hoysala 12) at ${timeStr}. Verified safe for vacation period 🛡️`,
-      lockStatus: "VERIFIED_LOCKED",
-    };
-
-    setHouses((prev) =>
-      prev.map((h) => {
-        if (h.id === houseId) {
-          const existingPatrol = h.policePatrol ?? createPolicePatrolRecord(h.id, h.residentName);
-          const updatedPatrol: PolicePatrolRecord = {
-            ...existingPatrol,
-            status: "VERIFIED_SAFE",
-            checkIns: [verifiedCheckIn, ...existingPatrol.checkIns],
-          };
-          const updatedHouse = { ...h, policePatrol: updatedPatrol };
-          if (selectedHouse && selectedHouse.id === houseId) {
-            setSelectedHouse(updatedHouse);
-          }
-          return updatedHouse;
-        }
-        return h;
-      })
-    );
-
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id === msgId) {
-          return {
-            ...m,
-            status: "resolved",
-            officialReply: `🚓 Hoysala Beat Unit #4 (HC Suresh K.): Front gate padlock verified intact & premises securely locked at ${timeStr}. Delivered directly to Citizen App.`,
-            replyTime: "Just now",
-            officerName: "HC Suresh K. (Beat Patrol Officer)",
-          };
-        }
-        return m;
-      })
-    );
-
-    sfx.policeChime();
-  }
-
-  function handleSendPoliceCheckIn(
-    houseId: string,
-    replyMessage: string,
-    lockStatus: "VERIFIED_LOCKED" | "ALL_CLEAR" | "PERIMETER_CHECKED" = "VERIFIED_LOCKED"
-  ) {
-    const newCheckIn: PoliceCheckInReply = {
-      id: `CHK-${houseId}-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
-      officerName: "HC Suresh K.",
-      badgeNumber: "HC-4412",
-      patrolVehicle: "Hoysala 12",
-      message: replyMessage,
-      lockStatus,
-    };
-
-    setHouses((prev) =>
-      prev.map((h) => {
-        if (h.id === houseId) {
-          const existingPatrol = h.policePatrol ?? createPolicePatrolRecord(h.id, h.residentName);
-          const updatedPatrol: PolicePatrolRecord = {
-            ...existingPatrol,
-            checkIns: [newCheckIn, ...existingPatrol.checkIns],
-          };
-          const updatedHouse = { ...h, policePatrol: updatedPatrol };
-          if (selectedHouse && selectedHouse.id === houseId) {
-            setSelectedHouse(updatedHouse);
-          }
-          return updatedHouse;
-        }
-        return h;
-      })
-    );
-
-    const targetHouse = houses.find((h) => h.id === houseId);
-    const newMsg: MessageItem = {
-      id: `MSG-POL-${Date.now()}`,
-      houseId,
-      residentName: targetHouse?.residentName ?? "Resident",
-      category: "Police Patrol",
-      messageText: `Beat Patrol Officer Check-in for House #${houseId}: "${replyMessage}"`,
-      timestamp: "Just now",
-      status: "resolved",
-      officialReply: `Pushed to citizen app: "${replyMessage}" (Padlock Verified)`,
-      replyTime: "Just now",
-      officerName: "HC Suresh K. (Beat Patrol Officer)",
-    };
-    setMessages((prev) => [newMsg, ...prev]);
-  }
-
-  function handleSimulatePoliceCheckIn() {
-    const vacationHouses = houses.filter((h) => h.status === "out_of_station");
-    const target = vacationHouses[0] || houses[0];
-    handleSendPoliceCheckIn(
-      target.id,
-      `Perimeter & main gate padlock verified intact at ${new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}. All secure 🛡️👮`,
-      "VERIFIED_LOCKED"
-    );
-    sfx.policeChime();
   }
 
   function handleSaveAllotment(updatedDetails: Partial<HouseSeat>) {
@@ -2566,9 +2074,7 @@ export default function GovDashboard() {
             onSelectMsgId={setSelectedMsgId}
             onReply={handleReplyMessage}
             onNewMockMessage={handleSimulateIncomingMessage}
-            onPushVacationMode={handlePushVacationPoliceAlert}
-            onSimulatePoliceCheckIn={handleSimulatePoliceCheckIn}
-            onVerifyPoliceTicket={handleVerifyPoliceTicket}
+            onSimulateTravelNotice={handleSimulateTravelNotice}
           />
         </section>
 
@@ -2594,7 +2100,6 @@ export default function GovDashboard() {
             setEditingHouse(selectedHouse);
             setSelectedHouse(null);
           }}
-          onSendPoliceCheckIn={handleSendPoliceCheckIn}
         />
       )}
 
