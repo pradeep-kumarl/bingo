@@ -31,5 +31,4 @@ macOS/Linux: `bash scripts/setup.sh`
 ## Region
 Use AWS Mumbai (ap-south-1).
 
-## BinGo card (recognition, not punishment)
-Each household gets a card with five squares: wet, sanitary, dry, furniture, event waste. A correct scan fills a square; a full card is a "BinGo!". Streaks and a zone leaderboard sit on top.
+
