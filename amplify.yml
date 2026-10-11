@@ -9,6 +9,8 @@ applications: # Configure monorepo application deployments
         build: # Commands executed to compile and build application
           commands: # List of build shell commands
             - npm run build # Execute Next.js optimized production build
+        environmentVariables: # Amplify environment variables injected at build time
+          NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL} # API Gateway base URL (set in Amplify console)
       artifacts: # Specify generated output artifacts to deploy
         baseDirectory: .next # Target the Next.js production output directory
         files: # Define artifact inclusion patterns
