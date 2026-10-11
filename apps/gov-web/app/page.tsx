@@ -317,19 +317,33 @@ function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPer
   return MONTH_NAMES.map((name, mIdx) => {
     const totalDays = MONTH_DAYS[mIdx];
     const monthHash = ((houseIndex * 41 + mIdx * 29) * 2654435761) >>> 0;
-    const rateFactor = (monthHash % 35) + 65;
+    const rateFactor = (monthHash % 25) + 75; // Baseline high compliance (75% to 99%)
 
     let daysDropped = Math.round((totalDays * rateFactor) / 100);
+    let activeObligationDays = totalDays;
+
     if (mIdx === 9) {
-      if (todayStatus === "out_of_station") daysDropped = Math.max(12, daysDropped - 8);
-      else if (todayStatus === "dropped") daysDropped = Math.min(totalDays, daysDropped + 2);
+      if (todayStatus === "out_of_station") {
+        // Vacation Mode / Streak Freeze: Household is traveling for 8 days.
+        // Out of station does NOT reduce compliance: active obligation days are reduced by the vacation days,
+        // or vacation days are counted as protected compliant days!
+        const vacationDays = 8;
+        activeObligationDays = totalDays - vacationDays;
+        daysDropped = Math.round((activeObligationDays * rateFactor) / 100);
+      } else if (todayStatus === "dropped") {
+        daysDropped = Math.min(totalDays, daysDropped + 2);
+      }
     }
 
-    const compliancePct = Math.round((daysDropped / totalDays) * 100);
+    // Compliance % does not penalize out of station days
+    const compliancePct = Math.min(100, Math.round((daysDropped / activeObligationDays) * 100));
     let sparrowMood: MonthPerformance["sparrowMood"] = "happy_sparrow";
     let badgeLabel = "Good Binner";
 
-    if (compliancePct >= 92) {
+    if (todayStatus === "out_of_station" && mIdx === 9) {
+      sparrowMood = "vacation_sparrow";
+      badgeLabel = "Protected Streak 🏖️";
+    } else if (compliancePct >= 92) {
       sparrowMood = "gold_sparrow";
       badgeLabel = "Eco Champion";
     } else if (compliancePct >= 80) {

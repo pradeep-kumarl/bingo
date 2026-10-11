@@ -2,21 +2,21 @@
  * BinGo Resident Mobile App
  * Expo ~57 / React Native 0.86 / Expo Camera / TypeScript
  *
- * Features:
- * 1. Live Camera QR Scanner & manual fallback for bin QR codes
- * 2. Visual Theater Seat Viewer for the resident's allotted seat (#0000 to #1000)
- *    with interactive Chirpy Sparrow mascot (Green=Dropped, Grey=Frozen Ice, Amber=Vacation)
- * 3. 12-Month Waste Performance history with compliance percentage
- * 4. 2-Way Message Desk: Send Bulk Waste / Event orders, bin issues & requests directly to Govt Admin
- * 5. Instant Vacation Mode / Streak Freeze toggle
+ * Requirements:
+ * 1. Out of station does NOT reduce compliance percentage (vacation days protected / exempted)
+ * 2. Removed chair / "View My Theater Seat" — replaced with clean "View My Tab"
+ * 3. Bottom tab navigation / top tab bar for seamless switching:
+ *    - Home Dashboard (Stats & QR Scanner)
+ *    - View My Tab (Resident profile, household status, 12-month compliance, allotment)
+ *    - Bulk Orders & Admin Message Board (2-way chat with Govt)
+ * 4. Live camera scan at bins with instant drop confirmation pop-up
  */
 
 import { StatusBar } from 'expo-status-bar';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Modal,
   Pressable,
   ScrollView,
@@ -60,7 +60,7 @@ interface HouseSeat {
 interface CitizenMessage {
   id: string;
   houseId: string;
-  category: 'Bulky Pickup' | 'Bin Overflow' | 'Travel / Freeze' | 'Bulk Order / Event' | 'Query';
+  category: 'Bulk Order / Event' | 'Bulky Pickup' | 'Bin Overflow' | 'Travel / Freeze' | 'Query';
   messageText: string;
   timestamp: string;
   status: 'pending_reply' | 'resolved';
@@ -69,7 +69,7 @@ interface CitizenMessage {
   replyTime?: string;
 }
 
-type Screen = 'Home' | 'CameraScan' | 'MySeat' | 'BulkOrder' | 'History';
+type TabKey = 'Home' | 'MyTab' | 'BulkOrder' | 'CameraScan';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const WASTE_META: Record<WasteType, { label: string; icon: string; desc: string }> = {
@@ -83,24 +83,48 @@ const WASTE_META: Record<WasteType, { label: string; icon: string; desc: string 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
+/**
+ * 12-Month Performance generator:
+ * Note: Out of Station does NOT reduce compliance percentage!
+ * Vacation days are exempt from obligation (total active required days is reduced),
+ * keeping compliance at 100% or protected rate.
+ */
 function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPerformance[] {
   return MONTH_NAMES.map((name, mIdx) => {
     const totalDays = MONTH_DAYS[mIdx];
     const monthHash = ((houseIndex * 41 + mIdx * 29) * 2654435761) >>> 0;
-    const rateFactor = (monthHash % 35) + 65;
+    const rateFactor = (monthHash % 25) + 75; // Baseline high compliance (75% to 99%)
+
     let daysDropped = Math.round((totalDays * rateFactor) / 100);
+    let activeObligationDays = totalDays;
 
     if (mIdx === 9) { // October (current month)
-      if (todayStatus === 'out_of_station') daysDropped = Math.max(12, daysDropped - 6);
-      else if (todayStatus === 'dropped') daysDropped = Math.min(totalDays, daysDropped + 2);
+      if (todayStatus === 'out_of_station') {
+        // Vacation Mode / Out of Station: 8 vacation days are protected and NOT penalized.
+        // Active required days reduced, so compliance does NOT drop!
+        const vacationDays = 8;
+        activeObligationDays = totalDays - vacationDays;
+        daysDropped = Math.round((activeObligationDays * rateFactor) / 100);
+      } else if (todayStatus === 'dropped') {
+        daysDropped = Math.min(totalDays, daysDropped + 2);
+      }
     }
 
-    const compliancePct = Math.round((daysDropped / totalDays) * 100);
+    // Compliance percentage calculation protected against vacation days
+    const compliancePct = Math.min(100, Math.round((daysDropped / activeObligationDays) * 100));
     let badgeLabel = 'Good Binner';
-    if (compliancePct >= 90) badgeLabel = 'Eco Champion 🌟';
-    else if (compliancePct >= 80) badgeLabel = 'Active Streak 🔥';
-    else if (compliancePct >= 70) badgeLabel = 'Travel Freeze 🏖️';
-    else badgeLabel = 'Frozen Defrost ❄️';
+
+    if (todayStatus === 'out_of_station' && mIdx === 9) {
+      badgeLabel = 'Protected Streak 🏖️';
+    } else if (compliancePct >= 90) {
+      badgeLabel = 'Eco Champion 🌟';
+    } else if (compliancePct >= 80) {
+      badgeLabel = 'Active Streak 🔥';
+    } else if (compliancePct >= 70) {
+      badgeLabel = 'Good Binner 🍀';
+    } else {
+      badgeLabel = 'Needs Defrost ❄️';
+    }
 
     return {
       monthName: name,
@@ -123,7 +147,7 @@ function createHouseSeat(houseId: string, status: SeatStatus = 'pending'): House
     numericId,
     block,
     status,
-    streak: status === 'dropped' ? 7 : 0,
+    streak: status === 'dropped' ? 8 : status === 'out_of_station' ? 7 : 0,
     monthDropsCount: currentMonth.daysDropped,
     monthTotalDays: currentMonth.totalDays,
     dropTimeToday: status === 'dropped' ? '08:24 AM' : undefined,
@@ -166,7 +190,7 @@ function ChirpyMascot({ mood, size = 64 }: { mood: 'happy' | 'frozen' | 'vacatio
 export default function App() {
   const [houseId, setHouseId] = useState('0104');
   const [house, setHouse] = useState<HouseSeat>(() => createHouseSeat('0104', 'pending'));
-  const [currentScreen, setCurrentScreen] = useState<Screen>('Home');
+  const [activeTab, setActiveTab] = useState<TabKey>('Home');
 
   // Messages / Bulk orders sent to Admin Panel
   const [messages, setMessages] = useState<CitizenMessage[]>([
@@ -208,12 +232,12 @@ export default function App() {
   // Drop recorded notification
   const [lastDropWaste, setLastDropWaste] = useState<WasteType>('wet');
 
-  // Switch House ID (e.g. testing different seats from 0000 to 1000)
+  // Switch House ID (e.g. testing different houses from 0000 to 1000)
   function handleSaveHouseId(newId: string) {
     const clean = newId.trim().padStart(4, '0');
     setHouseId(clean);
     setHouse(createHouseSeat(clean, house.status));
-    Alert.alert('Seat Updated', `Switched to House Seat #${clean} in Ward 151.`);
+    Alert.alert('Household Switched', `Active tab updated to House #${clean} in Ward 151.`);
   }
 
   // Handle Scan recording
@@ -246,10 +270,10 @@ export default function App() {
     else if (lower.includes('event')) detectedType = 'event';
 
     handleRecordWasteDrop(detectedType, data);
-    setCurrentScreen('Home');
+    setActiveTab('Home');
   }
 
-  // Vacation Mode Toggle
+  // Vacation Mode Toggle (Out of station does NOT reduce compliance!)
   function handleToggleVacation() {
     const nextStatus: SeatStatus = house.status === 'out_of_station' ? 'pending' : 'out_of_station';
     const updatedMonths = generate12Months(house.numericId, nextStatus);
@@ -266,14 +290,17 @@ export default function App() {
         id: `MSG-TRV-${Date.now()}`,
         houseId: house.id,
         category: 'Travel / Freeze',
-        messageText: `Travel Notice: House #${house.id} enabled Vacation Mode. Pausing daily drops & protecting streak 🏖️`,
+        messageText: `Travel Notice: House #${house.id} activated Out of Station. Pausing daily drops with 100% compliance score protected 🏖️`,
         timestamp: 'Just now',
         status: 'pending_reply',
       };
       setMessages((prev) => [vacationMsg, ...prev]);
-      Alert.alert('Vacation Mode Activated 🏖️', 'Streak is protected! Daily waste drops paused without penalizing your score.');
+      Alert.alert(
+        'Out of Station Activated 🏖️',
+        'Compliance Protected! Vacation days are exempt from requirements, so your compliance percentage does NOT reduce.'
+      );
     } else {
-      Alert.alert('Welcome Back! 🏠', 'Vacation mode ended. Streak tracking resumed.');
+      Alert.alert('Welcome Back! 🏠', 'Out of station ended. Daily waste drop tracking resumed.');
     }
   }
 
@@ -297,14 +324,13 @@ export default function App() {
       setMessages((prev) => [newMsg, ...prev]);
       setOrderNotes('');
       setOrderSubmitting(false);
-      Alert.alert('Request Sent to Admin! 🚀', `Your ${orderCategory} request was transmitted directly to the Municipal Officer desk.`);
-      setCurrentScreen('BulkOrder');
+      Alert.alert('Transmitted to Admin! 🚀', `Your ${orderCategory} request has been logged in the Municipal Officer desk.`);
     }, 600);
   }
 
-  // ── Render Screens ──
+  // ── Render Tabs ──
 
-  // SCREEN 1: Home Dashboard
+  // TAB 1: Home Dashboard
   function renderHome() {
     const isDropped = house.status === 'dropped';
     const isVacation = house.status === 'out_of_station';
@@ -317,10 +343,10 @@ export default function App() {
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.headerWardBadge}>WARD 151 · ZONE 1 (0000-1000)</Text>
-              <Text style={styles.headerTitle}>House Seat #{house.id}</Text>
+              <Text style={styles.headerTitle}>House #{house.id}</Text>
               <Text style={styles.headerSubtitle}>{house.residentName} · {house.block}</Text>
             </View>
-            <Pressable onPress={() => setCurrentScreen('MySeat')}>
+            <Pressable onPress={() => setActiveTab('MyTab')}>
               <ChirpyMascot
                 mood={isDropped ? 'happy' : isVacation ? 'vacation' : 'frozen'}
                 size={58}
@@ -328,7 +354,7 @@ export default function App() {
             </Pressable>
           </View>
 
-          {/* Quick House Status Pill */}
+          {/* Quick House Status Banner */}
           <View style={[
             styles.statusBanner,
             isDropped ? styles.bannerDropped : isVacation ? styles.bannerVacation : styles.bannerFrozen
@@ -337,13 +363,13 @@ export default function App() {
               {isDropped
                 ? `✅ Binned Today at ${house.dropTimeToday ?? '08:24 AM'} · Streak Active 🔥`
                 : isVacation
-                ? '🏖️ Vacation Mode Active · Streak Freeze Protected'
+                ? '🏖️ Out of Station Active · Compliance Protected (No Reduction)'
                 : '❄️ Drop Pending for Today · Defrost Chirpy Before 8 PM!'}
             </Text>
           </View>
         </View>
 
-        {/* Big Action Buttons */}
+        {/* Big Action Navigation Buttons */}
         <View style={styles.actionGrid}>
           {/* 1. Scan at Bins Button */}
           <Pressable
@@ -355,39 +381,41 @@ export default function App() {
                   Alert.alert('Camera Permission', 'Camera permission needed to scan bin QR codes. You can also type code manually.');
                 }
               }
-              setCurrentScreen('CameraScan');
+              setActiveTab('CameraScan');
             }}
           >
             <Text style={styles.bigButtonIcon}>📷</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.bigButtonTitle}>Scan Bin QR Code</Text>
-              <Text style={styles.bigButtonSub}>Point phone at bin to log daily drop</Text>
+              <Text style={styles.bigButtonSub}>Point camera at waste bay to log daily drop</Text>
             </View>
             <Text style={styles.arrowIcon}>→</Text>
           </Pressable>
 
-          {/* 2. My Theater Seat Button */}
+          {/* 2. View My Tab Button */}
           <Pressable
-            style={[styles.bigButton, styles.bigButtonSeat]}
-            onPress={() => setCurrentScreen('MySeat')}
+            style={[styles.bigButton, styles.bigButtonTab]}
+            onPress={() => setActiveTab('MyTab')}
           >
-            <Text style={styles.bigButtonIcon}>🪑</Text>
+            <Text style={styles.bigButtonIcon}>📑</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.bigButtonTitle}>View My Theater Seat</Text>
-              <Text style={styles.bigButtonSub}>Seat #{house.id} · 12-Month Performance</Text>
+              <Text style={styles.bigButtonTitle}>View My Tab</Text>
+              <Text style={styles.bigButtonSub}>Household info, 12-Month score & status</Text>
             </View>
             <View style={[
-              styles.seatMiniBadge,
-              isDropped ? styles.seatMiniDropped : isVacation ? styles.seatMiniVacation : styles.seatMiniFrozen
+              styles.statusPillBadge,
+              isDropped ? styles.pillDropped : isVacation ? styles.pillVacation : styles.pillFrozen
             ]}>
-              <Text style={styles.seatMiniBadgeText}>{isDropped ? 'GREEN' : isVacation ? 'AMBER' : 'GREY'}</Text>
+              <Text style={styles.statusPillText}>
+                {isDropped ? 'DROPPED' : isVacation ? 'TRAVEL' : 'PENDING'}
+              </Text>
             </View>
           </Pressable>
 
           {/* 3. Bulk Order / Message to Admin */}
           <Pressable
             style={[styles.bigButton, styles.bigButtonBulk]}
-            onPress={() => setCurrentScreen('BulkOrder')}
+            onPress={() => setActiveTab('BulkOrder')}
           >
             <Text style={styles.bigButtonIcon}>📦</Text>
             <View style={{ flex: 1 }}>
@@ -402,7 +430,7 @@ export default function App() {
 
         {/* Today's Streak & Stats Widget */}
         <View style={styles.card}>
-          <Text style={styles.cardHeader}>🏅 Your Monthly Recycling Card</Text>
+          <Text style={styles.cardHeader}>🏅 Your Monthly Recycling Score</Text>
           <View style={styles.statsRow}>
             <View style={styles.statBox}>
               <Text style={styles.statVal}>{house.streak} Days</Text>
@@ -419,7 +447,7 @@ export default function App() {
           </View>
 
           {/* Quick Drop Simulation / Manual Trigger */}
-          <Text style={styles.sectionSubtitle}>Quick Log Waste Drop:</Text>
+          <Text style={styles.sectionSubtitle}>Quick Drop Log (Test Bins):</Text>
           <View style={styles.wastePillRow}>
             {(['wet', 'dry', 'sanitary', 'furniture', 'event'] as WasteType[]).map((w) => (
               <Pressable
@@ -434,13 +462,13 @@ export default function App() {
           </View>
         </View>
 
-        {/* Vacation Mode Quick Toggle */}
+        {/* Out of Station Toggle */}
         <View style={styles.card}>
           <View style={styles.toggleRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.toggleTitle}>🏖️ Vacation / Out of Station</Text>
+              <Text style={styles.toggleTitle}>🏖️ Out of Station / Vacation</Text>
               <Text style={styles.toggleDesc}>
-                Traveling? Protect streak from freezing. Automatically notifies govt waste system.
+                Traveling? Protects streak & does NOT reduce compliance percentage.
               </Text>
             </View>
             <Pressable
@@ -457,92 +485,8 @@ export default function App() {
     );
   }
 
-  // SCREEN 2: Camera Scanner
-  function renderCameraScan() {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        <View style={styles.cameraTopBar}>
-          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.cameraBackBtn}>
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>✕ Close</Text>
-          </Pressable>
-          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Scan Bin QR Code</Text>
-          <View style={{ width: 50 }} />
-        </View>
-
-        {permission?.granted ? (
-          <CameraView
-            style={{ flex: 1 }}
-            facing="back"
-            onBarcodeScanned={handleBarcodeScanned}
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr', 'code128'],
-            }}
-          >
-            {/* Viewfinder Target */}
-            <View style={styles.viewFinderOverlay}>
-              <View style={styles.viewFinderBox}>
-                <View style={styles.viewFinderReticle} />
-                <Text style={styles.viewFinderText}>Align QR code inside box</Text>
-              </View>
-            </View>
-          </CameraView>
-        ) : (
-          <View style={styles.noCameraBox}>
-            <Text style={{ fontSize: 44, marginBottom: 12 }}>📷</Text>
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' }}>
-              Camera Access Needed
-            </Text>
-            <Text style={{ color: '#9CA3AF', fontSize: 13, textAlign: 'center', marginTop: 6, marginHorizontal: 20 }}>
-              Allow camera permission to scan QR stickers affixed to your designated waste bins.
-            </Text>
-            <Pressable
-              style={styles.permissionBtn}
-              onPress={requestPermission}
-            >
-              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Grant Permission</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* Manual Code Input Tray */}
-        <View style={styles.cameraBottomTray}>
-          <Text style={{ color: '#E5E7EB', fontSize: 12, marginBottom: 8, fontWeight: '600' }}>
-            Or type bin barcode / bay ID manually:
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TextInput
-              style={styles.manualCodeInput}
-              placeholder="e.g. BAY-WET-01, BAY-DRY-01"
-              placeholderTextColor="#9CA3AF"
-              value={manualCodeInput}
-              onChangeText={setManualCodeInput}
-              autoCapitalize="characters"
-            />
-            <Pressable
-              style={styles.manualCodeSubmit}
-              onPress={() => {
-                const code = manualCodeInput.trim() || 'BAY-WET-01';
-                let detected: WasteType = 'wet';
-                if (code.toLowerCase().includes('dry')) detected = 'dry';
-                else if (code.toLowerCase().includes('sanit')) detected = 'sanitary';
-                else if (code.toLowerCase().includes('furn')) detected = 'furniture';
-                else if (code.toLowerCase().includes('event')) detected = 'event';
-
-                handleRecordWasteDrop(detected, code);
-                setManualCodeInput('');
-                setCurrentScreen('Home');
-              }}
-            >
-              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Submit</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    );
-  }
-
-  // SCREEN 3: My Theater Seat View
-  function renderMySeat() {
+  // TAB 2: View My Tab (Profile, Status, 12-Month Compliance)
+  function renderMyTab() {
     const isDropped = house.status === 'dropped';
     const isVacation = house.status === 'out_of_station';
     const totalYearDrops = house.twelveMonths.reduce((a, b) => a + b.daysDropped, 0);
@@ -552,60 +496,66 @@ export default function App() {
     return (
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.navHeader}>
-          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.navBackBtn}>
+          <Pressable onPress={() => setActiveTab('Home')} style={styles.navBackBtn}>
             <Text style={styles.navBackText}>← Back</Text>
           </Pressable>
-          <Text style={styles.navTitle}>Theater Seating Status</Text>
+          <Text style={styles.navTitle}>View My Tab</Text>
         </View>
 
-        {/* Big Theater Seat Card (representing 1 seat in 0000-1000) */}
-        <View style={styles.theaterSeatCard}>
-          <View style={styles.theaterStageLine}>
-            <Text style={styles.theaterStageText}>ZONE 1 THEATER GRID · SEAT 0000 TO 1000</Text>
+        {/* Resident Summary Tab Card */}
+        <View style={styles.myTabCard}>
+          <View style={styles.myTabHeaderRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.myTabSub}>RESIDENT TAB · ZONE 1 (0000 TO 1000)</Text>
+              <Text style={styles.myTabHouseId}>House #{house.id}</Text>
+              <Text style={styles.myTabResident}>{house.residentName}</Text>
+              <Text style={styles.myTabAddress}>{house.address}</Text>
+            </View>
+            <ChirpyMascot
+              mood={isDropped ? 'happy' : isVacation ? 'vacation' : 'frozen'}
+              size={70}
+            />
           </View>
 
-          <View style={styles.seatVisualCenter}>
-            {/* The Seat Icon */}
-            <View style={[
-              styles.bigSeatBox,
-              isDropped ? styles.bigSeatDropped : isVacation ? styles.bigSeatVacation : styles.bigSeatFrozen
-            ]}>
-              <ChirpyMascot
-                mood={isDropped ? 'happy' : isVacation ? 'vacation' : 'frozen'}
-                size={76}
-              />
-              <Text style={styles.seatNumberText}>#{house.id}</Text>
-              <Text style={styles.seatStatusPill}>
-                {isDropped ? 'GREEN SEAT (DROPPED)' : isVacation ? 'AMBER SEAT (VACATION)' : 'GREY SEAT (PENDING)'}
-              </Text>
-            </View>
-
-            <Text style={styles.seatResidentName}>{house.residentName}</Text>
-            <Text style={styles.seatAddressText}>{house.address}</Text>
+          {/* Current Status Banner */}
+          <View style={[
+            styles.tabStatusBox,
+            isDropped ? styles.tabStatusDropped : isVacation ? styles.tabStatusVacation : styles.tabStatusFrozen
+          ]}>
+            <Text style={styles.tabStatusTitle}>
+              {isDropped ? '🟢 Status: Dropped Today' : isVacation ? '🟡 Status: Out of Station (Protected)' : '⚪ Status: Pending Drop'}
+            </Text>
+            <Text style={styles.tabStatusDesc}>
+              {isDropped
+                ? `Waste recorded at ${house.dropTimeToday ?? '08:24 AM'}. Streak is on!`
+                : isVacation
+                ? 'Out of station is active: compliance percentage is protected and does not drop.'
+                : 'Pending waste drop for today. Log via camera scan or bin drop before 8 PM.'}
+            </Text>
           </View>
 
-          {/* Seat Color Legend explanation */}
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#16A34A' }]} />
-              <Text style={styles.legendText}>Green: Dropped</Text>
+          {/* Quick Details Grid */}
+          <View style={styles.tabMetricsRow}>
+            <View style={styles.tabMetricItem}>
+              <Text style={styles.tabMetricVal}>{house.block}</Text>
+              <Text style={styles.tabMetricLabel}>Assigned Block</Text>
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#475569' }]} />
-              <Text style={styles.legendText}>Grey: Not Dropped</Text>
+            <View style={styles.tabMetricItem}>
+              <Text style={styles.tabMetricVal}>{house.streak} Days</Text>
+              <Text style={styles.tabMetricLabel}>Active Streak</Text>
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
-              <Text style={styles.legendText}>Amber: Vacation</Text>
+            <View style={styles.tabMetricItem}>
+              <Text style={[styles.tabMetricVal, { color: '#16A34A' }]}>{yearPct}%</Text>
+              <Text style={styles.tabMetricLabel}>Year Compliance</Text>
             </View>
           </View>
         </View>
 
-        {/* Switch House Seat Number Input */}
+        {/* Change / Allot Household Number Input */}
         <View style={styles.card}>
-          <Text style={styles.cardHeader}>Allotted Seat Identifier</Text>
+          <Text style={styles.cardHeader}>Household Tab Identifier</Text>
           <Text style={styles.helpText}>
-            Zone 1 comprises households 0000 through 1000. Enter your allotted number below:
+            Enter your allotted house number (0000 to 1000) to view that household tab:
           </Text>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
             <TextInput
@@ -620,24 +570,27 @@ export default function App() {
               style={styles.saveSeatBtn}
               onPress={() => handleSaveHouseId(houseId)}
             >
-              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Allot Seat</Text>
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Update Tab</Text>
             </Pressable>
           </View>
         </View>
 
-        {/* 12-Month Performance Breakdown */}
+        {/* 12-Month Performance & Compliance Breakdown */}
         <View style={styles.card}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={styles.cardHeader}>12-Month Drop History</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <Text style={styles.cardHeader}>12-Month Compliance History</Text>
             <Text style={styles.yearScoreBadge}>{yearPct}% Year Average</Text>
           </View>
+          <Text style={[styles.helpText, { marginBottom: 12 }]}>
+            🛡️ Out of Station days are fully exempted and do NOT reduce your compliance score.
+          </Text>
 
           <View style={styles.monthGrid}>
             {house.twelveMonths.map((m, idx) => (
               <View key={m.monthName} style={[styles.monthCard, idx === 9 && styles.monthCardActive]}>
                 <Text style={styles.monthTitle}>{m.monthName}</Text>
                 <Text style={styles.monthScore}>{m.compliancePct}%</Text>
-                <Text style={styles.monthDrops}>{m.daysDropped}/{m.totalDays} days</Text>
+                <Text style={styles.monthDrops}>{m.daysDropped}/{m.totalDays} d</Text>
                 <Text style={styles.monthBadge}>{m.badgeLabel.split(' ')[0]}</Text>
               </View>
             ))}
@@ -647,12 +600,12 @@ export default function App() {
     );
   }
 
-  // SCREEN 4: Bulk Order & 2-Way Message Desk
+  // TAB 3: Bulk Orders & 2-Way Message Desk
   function renderBulkOrder() {
     return (
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.navHeader}>
-          <Pressable onPress={() => setCurrentScreen('Home')} style={styles.navBackBtn}>
+          <Pressable onPress={() => setActiveTab('Home')} style={styles.navBackBtn}>
             <Text style={styles.navBackText}>← Back</Text>
           </Pressable>
           <Text style={styles.navTitle}>Bulk Orders & Admin Desk</Text>
@@ -747,15 +700,149 @@ export default function App() {
     );
   }
 
+  // TAB 4: Camera Scanner
+  function renderCameraScan() {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <View style={styles.cameraTopBar}>
+          <Pressable onPress={() => setActiveTab('Home')} style={styles.cameraBackBtn}>
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>✕ Close</Text>
+          </Pressable>
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Scan Bin QR Code</Text>
+          <View style={{ width: 50 }} />
+        </View>
+
+        {permission?.granted ? (
+          <CameraView
+            style={{ flex: 1 }}
+            facing="back"
+            onBarcodeScanned={handleBarcodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'code128'],
+            }}
+          >
+            {/* Viewfinder Target */}
+            <View style={styles.viewFinderOverlay}>
+              <View style={styles.viewFinderBox}>
+                <View style={styles.viewFinderReticle} />
+                <Text style={styles.viewFinderText}>Align QR code inside box</Text>
+              </View>
+            </View>
+          </CameraView>
+        ) : (
+          <View style={styles.noCameraBox}>
+            <Text style={{ fontSize: 44, marginBottom: 12 }}>📷</Text>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' }}>
+              Camera Access Needed
+            </Text>
+            <Text style={{ color: '#9CA3AF', fontSize: 13, textAlign: 'center', marginTop: 6, marginHorizontal: 20 }}>
+              Allow camera permission to scan QR stickers affixed to your designated waste bins.
+            </Text>
+            <Pressable
+              style={styles.permissionBtn}
+              onPress={requestPermission}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Grant Permission</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Manual Code Input Tray */}
+        <View style={styles.cameraBottomTray}>
+          <Text style={{ color: '#E5E7EB', fontSize: 12, marginBottom: 8, fontWeight: '600' }}>
+            Or type bin barcode / bay ID manually:
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TextInput
+              style={styles.manualCodeInput}
+              placeholder="e.g. BAY-WET-01, BAY-DRY-01"
+              placeholderTextColor="#9CA3AF"
+              value={manualCodeInput}
+              onChangeText={setManualCodeInput}
+              autoCapitalize="characters"
+            />
+            <Pressable
+              style={styles.manualCodeSubmit}
+              onPress={() => {
+                const code = manualCodeInput.trim() || 'BAY-WET-01';
+                let detected: WasteType = 'wet';
+                if (code.toLowerCase().includes('dry')) detected = 'dry';
+                else if (code.toLowerCase().includes('sanit')) detected = 'sanitary';
+                else if (code.toLowerCase().includes('furn')) detected = 'furniture';
+                else if (code.toLowerCase().includes('event')) detected = 'event';
+
+                handleRecordWasteDrop(detected, code);
+                setManualCodeInput('');
+                setActiveTab('Home');
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Submit</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
 
-      {/* Screen Router */}
-      {currentScreen === 'Home' && renderHome()}
-      {currentScreen === 'CameraScan' && renderCameraScan()}
-      {currentScreen === 'MySeat' && renderMySeat()}
-      {currentScreen === 'BulkOrder' && renderBulkOrder()}
+      {/* Screen / Tab Content */}
+      <View style={{ flex: 1 }}>
+        {activeTab === 'Home' && renderHome()}
+        {activeTab === 'MyTab' && renderMyTab()}
+        {activeTab === 'BulkOrder' && renderBulkOrder()}
+        {activeTab === 'CameraScan' && renderCameraScan()}
+      </View>
+
+      {/* Bottom Tab Bar (Home / View My Tab / Bulk Orders / Scan) */}
+      {activeTab !== 'CameraScan' && (
+        <View style={styles.bottomTabBar}>
+          <Pressable
+            style={[styles.tabBarItem, activeTab === 'Home' && styles.tabBarItemActive]}
+            onPress={() => setActiveTab('Home')}
+          >
+            <Text style={styles.tabBarIcon}>🏠</Text>
+            <Text style={[styles.tabBarLabel, activeTab === 'Home' && styles.tabBarLabelActive]}>
+              Home
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.tabBarItem, activeTab === 'MyTab' && styles.tabBarItemActive]}
+            onPress={() => setActiveTab('MyTab')}
+          >
+            <Text style={styles.tabBarIcon}>📑</Text>
+            <Text style={[styles.tabBarLabel, activeTab === 'MyTab' && styles.tabBarLabelActive]}>
+              View My Tab
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.tabBarItem, activeTab === 'BulkOrder' && styles.tabBarItemActive]}
+            onPress={() => setActiveTab('BulkOrder')}
+          >
+            <Text style={styles.tabBarIcon}>📦</Text>
+            <Text style={[styles.tabBarLabel, activeTab === 'BulkOrder' && styles.tabBarLabelActive]}>
+              Bulk & Desk
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.tabBarItem, styles.tabBarScanItem]}
+            onPress={async () => {
+              if (!permission?.granted) {
+                await requestPermission();
+              }
+              setActiveTab('CameraScan');
+            }}
+          >
+            <Text style={styles.tabBarScanIcon}>📷</Text>
+            <Text style={styles.tabBarScanLabel}>Scan</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* Drop Success Modal */}
       <Modal
@@ -775,7 +862,7 @@ export default function App() {
             </Text>
             <View style={styles.modalStreakCard}>
               <Text style={styles.modalStreakVal}>🔥 {house.streak}-Day Active Streak</Text>
-              <Text style={styles.modalStreakSub}>Your theater seat #{house.id} has turned GREEN for today!</Text>
+              <Text style={styles.modalStreakSub}>House #{house.id} compliance score is 100% compliant for today!</Text>
             </View>
             <Pressable
               style={styles.modalCloseBtn}
@@ -805,7 +892,7 @@ const C = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  container: { padding: 18, paddingTop: 48, paddingBottom: 40 },
+  container: { padding: 18, paddingTop: 48, paddingBottom: 90 },
 
   // Header Card
   headerCard: {
@@ -852,18 +939,18 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   bigButtonScan: { borderLeftWidth: 6, borderLeftColor: '#16A34A' },
-  bigButtonSeat: { borderLeftWidth: 6, borderLeftColor: '#0284C7' },
+  bigButtonTab: { borderLeftWidth: 6, borderLeftColor: '#0284C7' },
   bigButtonBulk: { borderLeftWidth: 6, borderLeftColor: '#9333EA' },
-  bigButtonIcon: { fontSize: 32 },
+  bigButtonIcon: { fontSize: 30 },
   bigButtonTitle: { fontSize: 16, fontWeight: '800', color: C.textMain },
   bigButtonSub: { fontSize: 12, color: C.textMute, marginTop: 2 },
   arrowIcon: { fontSize: 20, color: '#9CA3AF', fontWeight: 'bold' },
 
-  seatMiniBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  seatMiniDropped: { backgroundColor: '#DCFCE7' },
-  seatMiniVacation: { backgroundColor: '#FEF3C7' },
-  seatMiniFrozen: { backgroundColor: '#E2E8F0' },
-  seatMiniBadgeText: { fontSize: 10, fontWeight: '800', color: C.textMain },
+  statusPillBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  pillDropped: { backgroundColor: '#DCFCE7' },
+  pillVacation: { backgroundColor: '#FEF3C7' },
+  pillFrozen: { backgroundColor: '#E2E8F0' },
+  statusPillText: { fontSize: 10, fontWeight: '800', color: C.textMain },
 
   msgCountBadge: { backgroundColor: '#F3E8FF', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3 },
   msgCountText: { fontSize: 11, fontWeight: 'bold', color: '#7E22CE' },
@@ -939,45 +1026,30 @@ const styles = StyleSheet.create({
   navBackText: { fontSize: 13, fontWeight: '700', color: C.textMain },
   navTitle: { fontSize: 18, fontWeight: '900', color: C.textMain },
 
-  // Theater Seat Card
-  theaterSeatCard: {
+  // View My Tab Card
+  myTabCard: {
     backgroundColor: '#0F172A',
     borderRadius: 24,
     padding: 22,
     marginBottom: 16,
-    alignItems: 'center',
   },
-  theaterStageLine: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#10B981',
-    paddingBottom: 6,
-    marginBottom: 20,
-    width: '100%',
-    alignItems: 'center',
-  },
-  theaterStageText: { fontSize: 10, fontWeight: '800', color: '#34D399', letterSpacing: 1.5 },
-  seatVisualCenter: { alignItems: 'center', marginBottom: 18 },
-  bigSeatBox: {
-    width: 140,
-    height: 140,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-    borderWidth: 3,
-  },
-  bigSeatDropped: { backgroundColor: '#16A34A', borderColor: '#4ADE80' },
-  bigSeatVacation: { backgroundColor: '#D97706', borderColor: '#FBBF24' },
-  bigSeatFrozen: { backgroundColor: '#334155', borderColor: '#64748B' },
-  seatNumberText: { fontSize: 16, fontWeight: '900', color: '#FFFFFF', marginTop: 4 },
-  seatStatusPill: { fontSize: 8, fontWeight: '900', color: '#E2E8F0', marginTop: 2 },
-  seatResidentName: { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
-  seatAddressText: { fontSize: 11, color: '#94A3B8', marginTop: 2, textAlign: 'center' },
+  myTabHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  myTabSub: { fontSize: 10, fontWeight: '800', color: '#34D399', letterSpacing: 1.2 },
+  myTabHouseId: { fontSize: 26, fontWeight: '900', color: '#FFFFFF', marginTop: 2 },
+  myTabResident: { fontSize: 16, fontWeight: '700', color: '#E2E8F0', marginTop: 2 },
+  myTabAddress: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
 
-  legendRow: { flexDirection: 'row', gap: 16, borderTopWidth: 1, borderTopColor: '#1E293B', paddingTop: 14 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { fontSize: 10, color: '#94A3B8', fontWeight: '600' },
+  tabStatusBox: { borderRadius: 14, padding: 12, marginBottom: 16 },
+  tabStatusDropped: { backgroundColor: 'rgba(22, 163, 74, 0.2)', borderWidth: 1, borderColor: '#16A34A' },
+  tabStatusVacation: { backgroundColor: 'rgba(217, 119, 6, 0.2)', borderWidth: 1, borderColor: '#D97706' },
+  tabStatusFrozen: { backgroundColor: 'rgba(51, 65, 85, 0.5)', borderWidth: 1, borderColor: '#475569' },
+  tabStatusTitle: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+  tabStatusDesc: { fontSize: 11, color: '#CBD5E1', marginTop: 2, lineHeight: 16 },
+
+  tabMetricsRow: { flexDirection: 'row', gap: 10, borderTopWidth: 1, borderTopColor: '#1E293B', paddingTop: 14 },
+  tabMetricItem: { flex: 1, alignItems: 'center' },
+  tabMetricVal: { fontSize: 15, fontWeight: '900', color: '#FFFFFF' },
+  tabMetricLabel: { fontSize: 10, color: '#94A3B8', marginTop: 2 },
 
   // 12-Month Grid
   yearScoreBadge: { fontSize: 12, fontWeight: '800', color: '#16A34A', backgroundColor: '#DCFCE7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
@@ -1099,6 +1171,39 @@ const styles = StyleSheet.create({
   manualCodeSubmit: { backgroundColor: '#16A34A', paddingHorizontal: 16, justifyContent: 'center', borderRadius: 12 },
   noCameraBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   permissionBtn: { backgroundColor: '#16A34A', marginTop: 18, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
+
+  // Bottom Tab Bar
+  bottomTabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  tabBarItem: { alignItems: 'center', justifyContent: 'center', paddingVertical: 4, paddingHorizontal: 10 },
+  tabBarItemActive: { opacity: 1 },
+  tabBarIcon: { fontSize: 20 },
+  tabBarLabel: { fontSize: 11, fontWeight: '700', color: '#6B7280', marginTop: 2 },
+  tabBarLabelActive: { color: '#16A34A' },
+  tabBarScanItem: {
+    backgroundColor: '#16A34A',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  tabBarScanIcon: { fontSize: 18, color: '#FFF' },
+  tabBarScanLabel: { fontSize: 10, fontWeight: '800', color: '#FFF', marginTop: 1 },
 
   // Success Modal
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center', padding: 24 },
