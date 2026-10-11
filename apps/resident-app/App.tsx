@@ -232,13 +232,8 @@ export default function App() {
   // Drop recorded notification
   const [lastDropWaste, setLastDropWaste] = useState<WasteType>('wet');
 
-  // Switch House ID (e.g. testing different houses from 0000 to 1000)
-  function handleSaveHouseId(newId: string) {
-    const clean = newId.trim().padStart(4, '0');
-    setHouseId(clean);
-    setHouse(createHouseSeat(clean, house.status));
-    Alert.alert('Household Switched', `Active tab updated to House #${clean} in Ward 151.`);
-  }
+  // House ID is permanently allotted by Govt Office (like electricity meter or vehicle reg number).
+  // Tenant or ownership updates can only be modified from the authorized Govt Admin Panel.
 
   // Handle Scan recording
   function handleRecordWasteDrop(type: WasteType = 'wet', bayCode?: string) {
@@ -551,27 +546,42 @@ export default function App() {
           </View>
         </View>
 
-        {/* Change / Allot Household Number Input */}
+        {/* Permanent Allotted Household Identifier Card (Locked like Electricity Meter / Vehicle Reg) */}
         <View style={styles.card}>
-          <Text style={styles.cardHeader}>Household Tab Identifier</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <Text style={styles.cardHeader}>🔒 Government Allotment Identifier</Text>
+            <View style={styles.lockedBadge}>
+              <Text style={styles.lockedBadgeText}>PERMANENT & FIXED</Text>
+            </View>
+          </View>
           <Text style={styles.helpText}>
-            Enter your allotted house number (0000 to 1000) to view that household tab:
+            This identifier is permanently assigned to your premises by the Ward 151 Govt Municipal Office (like an electricity meter or vehicle registration number).
           </Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-            <TextInput
-              style={[styles.input, { flex: 1, marginBottom: 0 }]}
-              value={houseId}
-              onChangeText={setHouseId}
-              placeholder="e.g. 0104"
-              keyboardType="number-pad"
-              maxLength={4}
-            />
-            <Pressable
-              style={styles.saveSeatBtn}
-              onPress={() => handleSaveHouseId(houseId)}
-            >
-              <Text style={{ color: '#fff', fontWeight: 'bold' }}>Update Tab</Text>
-            </Pressable>
+
+          <View style={styles.fixedIdContainer}>
+            <View style={styles.fixedIdRow}>
+              <Text style={styles.fixedIdLabel}>Premises Number:</Text>
+              <Text style={styles.fixedIdValue}>House #{house.id}</Text>
+            </View>
+            <View style={styles.fixedIdRow}>
+              <Text style={styles.fixedIdLabel}>Sector Block:</Text>
+              <Text style={styles.fixedIdValue}>{house.block} (Ward 151)</Text>
+            </View>
+            <View style={styles.fixedIdRow}>
+              <Text style={styles.fixedIdLabel}>RFID Token / QR Barcode:</Text>
+              <Text style={styles.fixedIdValue}>{house.assignedBadge}</Text>
+            </View>
+            <View style={styles.fixedIdRow}>
+              <Text style={styles.fixedIdLabel}>Registered Resident:</Text>
+              <Text style={styles.fixedIdValue}>{house.residentName}</Text>
+            </View>
+          </View>
+
+          <View style={styles.tenantNoticeBox}>
+            <Text style={styles.tenantNoticeIcon}>🏛️</Text>
+            <Text style={styles.tenantNoticeText}>
+              Tenant or ownership transfer? Allotment records can only be updated directly at the Government Ward Office with valid rental agreement / property deed.
+            </Text>
           </View>
         </View>
 
@@ -1091,12 +1101,40 @@ const styles = StyleSheet.create({
     minHeight: 85,
     textAlignVertical: 'top',
   },
-  saveSeatBtn: {
-    backgroundColor: '#16A34A',
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-    borderRadius: 12,
+  lockedBadge: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
+  lockedBadgeText: { fontSize: 9, fontWeight: '900', color: '#92400E' },
+  fixedIdContainer: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 8,
+  },
+  fixedIdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  fixedIdLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  fixedIdValue: { fontSize: 12, fontWeight: '800', color: '#0F172A', fontFamily: 'monospace' },
+  tenantNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 12,
+  },
+  tenantNoticeIcon: { fontSize: 18 },
+  tenantNoticeText: { flex: 1, fontSize: 11, color: '#166534', lineHeight: 16 },
   catChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   catChip: {
     backgroundColor: '#F3F4F6',
