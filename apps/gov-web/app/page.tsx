@@ -139,7 +139,7 @@ interface Alert {
   status: "PENDING" | "ACKNOWLEDGED";
   recipientName: string;
   recipientRole: string;
-  recipientPhone: string;
+  recipientPhone?: string;
   swapDriverName: string;
   swapTruckNumber: string;
   deliveryChannel: string;
@@ -189,7 +189,8 @@ export interface PolicePatrolRecord {
   beatSector: string;
   assignedVehicle: string;
   officerInCharge: string;
-  officerPhone: string;
+  officerRadioChannel?: string;
+  officerPhone?: string;
   status: "AUTOMATED_DISPATCHED" | "PATROL_ACTIVE" | "VERIFIED_SAFE";
   dispatchedTimestamp: string;
   patrolLink: string;
@@ -208,7 +209,7 @@ export interface HouseSeat {
   monthTotalDays: number;
   dropTimeToday?: string;
   residentName: string;
-  phone: string;
+  phone?: string;
   address: string;
   assignedBadge: string;
   twelveMonths: MonthPerformance[];
@@ -219,7 +220,7 @@ export interface MessageItem {
   id: string;
   houseId: string;
   residentName: string;
-  phone: string;
+  phone?: string;
   category: "Bulky Pickup" | "Bin Overflow" | "Travel / Freeze" | "Query" | "Police Patrol";
   messageText: string;
   timestamp: string;
@@ -300,10 +301,9 @@ const INITIAL_ALERTS: Alert[] = [
     status: "PENDING",
     recipientName: "M. Suresh",
     recipientRole: "Ward 151 Nodal Sanitation Officer",
-    recipientPhone: "+91 98450 12345",
     swapDriverName: "Ramesh Gowda",
     swapTruckNumber: "KA-01-EA-4412 (Backup Dry Vehicle)",
-    deliveryChannel: "AWS SNS (SMS + WhatsApp + Control Room Push)",
+    deliveryChannel: "AWS SNS (Radio + App Push + Control Room)",
   },
 ];
 
@@ -312,7 +312,6 @@ const INITIAL_MESSAGES: MessageItem[] = [
     id: "MSG-101",
     houseId: "0142",
     residentName: "Vikram Sengupta",
-    phone: "+91 98451 88234",
     category: "Bulky Pickup",
     messageText: "Hello Officer! We have 2 large wooden chairs and an old mattress. Can the furniture collection truck stop by our block tomorrow morning?",
     timestamp: "10 mins ago",
@@ -322,7 +321,6 @@ const INITIAL_MESSAGES: MessageItem[] = [
     id: "MSG-102",
     houseId: "0087",
     residentName: "Ananya Rao",
-    phone: "+91 97412 34567",
     category: "Bin Overflow",
     messageText: "Our family hosted a dinner party yesterday. We segregated organic waste into 3 biodegradable bags. Is Bay 1 open for extra drop before noon?",
     timestamp: "35 mins ago",
@@ -335,7 +333,6 @@ const INITIAL_MESSAGES: MessageItem[] = [
     id: "MSG-103",
     houseId: "0205",
     residentName: "Dr. K. Raman",
-    phone: "+91 99001 56789",
     category: "Travel / Freeze",
     messageText: "Traveling to Delhi for medical conference Oct 12–18. Setting house status to Out of Station. Please protect our 45-day Chirpy streak!",
     timestamp: "1 hour ago",
@@ -348,14 +345,10 @@ const INITIAL_MESSAGES: MessageItem[] = [
     id: "MSG-104",
     houseId: "0000",
     residentName: "Priya Sharma",
-    phone: "+91 98112 30000",
     category: "Police Patrol",
-    messageText: "Vacation Alert: Away till Oct 25. House locked. Requesting Hoysala Beat #4 patrol night vigil check-ins.",
-    timestamp: "2 hours ago",
-    status: "resolved",
-    officialReply: "🚓 Hoysala 12 Check-in (02:15 AM): Main gate padlock checked & secure. Perimeter safe 🛡️👮",
-    replyTime: "1 hour ago",
-    officerName: "HC Suresh K. (Beat Patrol Officer)",
+    messageText: "Vacation Alert: Away till Oct 25. House locked. Requesting Hoysala Beat #4 physical padlock verification & night vigil check-ins.",
+    timestamp: "12 mins ago",
+    status: "pending_reply",
   },
 ];
 
@@ -369,7 +362,7 @@ function createPolicePatrolRecord(houseId: string, residentName: string): Police
     beatSector: `Beat #${beatNum} (Koramangala Sector)`,
     assignedVehicle: `Hoysala Patrol KA-02-G-${vehicleNum}`,
     officerInCharge: "Head Constable Suresh K. & PC Raghu",
-    officerPhone: "+91 94808 01100",
+    officerRadioChannel: "KSP Hoysala VHF Ch-04 (Sector A)",
     status: "PATROL_ACTIVE",
     dispatchedTimestamp: "Today at 06:00 AM (Automated Link)",
     patrolLink: `https://police.ksp.gov.in/patrol/ward151/beat${beatNum}/house-${houseId}`,
@@ -493,7 +486,6 @@ function generateInitialHouses(): HouseSeat[] {
       monthTotalDays: currentMonthData.totalDays,
       dropTimeToday,
       residentName: name,
-      phone: `+91 ${98000 + (hash % 1999)} ${10000 + (hash % 89999)}`,
       address: `House #${id}, ${getBlockName(i)}, Green Glen Layout, Ward 151`,
       assignedBadge: `BG-RFID-${id}`,
       twelveMonths,
@@ -864,7 +856,7 @@ function SeatDetailModal({
                 )}
               </div>
               <p className="text-xs text-emerald-100 mt-0.5">
-                Ward 151 · {house.residentName} · {house.phone}
+                Ward 151 · {house.residentName} · {house.block}
               </p>
             </div>
           </div>
@@ -976,10 +968,10 @@ function SeatDetailModal({
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Emergency Beat Helpline:
+                    Beat Radio Frequency:
                   </span>
                   <span className="font-mono text-cyan-300">
-                    {house.policePatrol?.officerPhone ?? "+91 94808 01100"}
+                    {house.policePatrol?.officerRadioChannel ?? "KSP Hoysala VHF Ch-04 (Sector A)"}
                   </span>
                 </div>
               </div>
@@ -1020,7 +1012,7 @@ function SeatDetailModal({
                 <div className="bg-slate-950/80 rounded-2xl p-3 border border-slate-700/80 flex flex-col gap-2 mt-1">
                   <label className="text-[11px] font-bold text-cyan-300 flex items-center justify-between">
                     <span>Officer Patrol Check-in Reply to Resident App:</span>
-                    <span className="text-[10px] text-slate-400">Pushes directly to resident's phone</span>
+                    <span className="text-[10px] text-slate-400">Pushes directly to resident citizen app</span>
                   </label>
 
                   <div className="flex flex-wrap gap-1.5">
@@ -1113,8 +1105,10 @@ function SeatDetailModal({
                 <span className="font-bold">{house.residentName}</span>
               </div>
               <div>
-                <span className="text-gray-400 block text-[10px] uppercase font-semibold">Phone:</span>
-                <span className="font-mono">{house.phone}</span>
+                <span className="text-gray-400 block text-[10px] uppercase font-semibold">Citizen App Link:</span>
+                <span className="font-semibold text-emerald-700 flex items-center gap-1">
+                  <span>📲</span> Verified &amp; Active
+                </span>
               </div>
               <div className="col-span-2">
                 <span className="text-gray-400 block text-[10px] uppercase font-semibold">Address:</span>
@@ -1265,7 +1259,6 @@ function AdminAllotmentModal({
   onSave: (updated: Partial<HouseSeat>) => void;
 }) {
   const [name, setName] = useState(house.residentName);
-  const [phone, setPhone] = useState(house.phone);
   const [address, setAddress] = useState(house.address);
   const [block, setBlock] = useState(house.block);
   const [badge, setBadge] = useState(house.assignedBadge);
@@ -1274,7 +1267,6 @@ function AdminAllotmentModal({
     e.preventDefault();
     onSave({
       residentName: name,
-      phone,
       address,
       block,
       assignedBadge: badge,
@@ -1342,17 +1334,6 @@ function AdminAllotmentModal({
           </div>
 
           <div>
-            <label className="font-bold text-gray-700 block mb-1">Phone Number (SMS & WhatsApp)</label>
-            <input
-              type="text"
-              required
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-xl bg-white focus:ring-2 focus:ring-emerald-500 font-mono"
-            />
-          </div>
-
-          <div>
             <label className="font-bold text-gray-700 block mb-1">Physical Street / Apartment Address</label>
             <textarea
               rows={2}
@@ -1398,17 +1379,27 @@ function AdminAllotmentModal({
 
 function CitizenMessageBoard({
   messages,
+  filterCategory,
+  onSelectCategory,
+  selectedMsgId,
+  onSelectMsgId,
   onReply,
   onNewMockMessage,
+  onPushVacationMode,
   onSimulatePoliceCheckIn,
+  onVerifyPoliceTicket,
 }: {
   messages: MessageItem[];
+  filterCategory: "all" | "police" | "waste";
+  onSelectCategory: (cat: "all" | "police" | "waste") => void;
+  selectedMsgId: string;
+  onSelectMsgId: (id: string) => void;
   onReply: (messageId: string, replyText: string) => void;
   onNewMockMessage: () => void;
+  onPushVacationMode: () => void;
   onSimulatePoliceCheckIn: () => void;
+  onVerifyPoliceTicket: (messageId: string, houseId: string) => void;
 }) {
-  const [selectedMsgId, setSelectedMsgId] = useState<string>(messages[0]?.id || "");
-  const [filterCategory, setFilterCategory] = useState<"all" | "waste" | "police">("all");
   const [replyInput, setReplyInput] = useState("");
 
   const filteredMessages = messages.filter((m) => {
@@ -1417,7 +1408,15 @@ function CitizenMessageBoard({
     return true;
   });
 
-  const activeMsg = filteredMessages.find((m) => m.id === selectedMsgId) || filteredMessages[0] || messages[0];
+  const activeMsg =
+    filteredMessages.find((m) => m.id === selectedMsgId) ||
+    filteredMessages[0] ||
+    messages[0];
+
+  const pendingPoliceAlerts = messages.filter(
+    (m) => m.category === "Police Patrol" && m.status === "pending_reply"
+  );
+  const totalPoliceAlerts = messages.filter((m) => m.category === "Police Patrol").length;
 
   function handleSendReply() {
     if (!replyInput.trim() || !activeMsg) return;
@@ -1431,20 +1430,20 @@ function CitizenMessageBoard({
   }
 
   return (
-    <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 flex flex-col gap-5">
+    <div id="citizen-message-board" className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 flex flex-col gap-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-2xl">💬</span>
             <h3 className="text-base font-black text-gray-900">
-              Community Dispatch & 2-Way Citizen Message Board
+              Community Dispatch &amp; 2-Way Citizen Message Board
             </h3>
             <span className="text-[11px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">
               Live Sync (App ↔ Govt Desk)
             </span>
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            Residents submit requests via BinGo mobile app. Officers &amp; Beat Police reply directly back to resident phones.
+            Residents submit requests via BinGo mobile app. Officers &amp; Beat Police reply directly back to citizen app.
           </p>
         </div>
 
@@ -1460,6 +1459,14 @@ function CitizenMessageBoard({
           </button>
           <button
             onClick={() => {
+              onPushVacationMode();
+            }}
+            className="text-xs font-bold bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-xl cursor-pointer transition-colors shrink-0 shadow-xs flex items-center gap-1.5"
+          >
+            <span>🏖️</span> Push Vacation Mode (Auto-Alert Police)
+          </button>
+          <button
+            onClick={() => {
               onSimulatePoliceCheckIn();
             }}
             className="text-xs font-bold bg-slate-900 text-cyan-200 hover:bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-xl cursor-pointer transition-colors shrink-0 shadow-xs flex items-center gap-1"
@@ -1469,37 +1476,47 @@ function CitizenMessageBoard({
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 text-xs">
+      {/* Filter Tabs - TAB 2 IS STRICTLY THE POLICE PATROL & VACATION VERIFICATION TAB */}
+      <div className="flex items-center gap-2 text-xs flex-wrap">
+        {/* Tab 1: All Community Feeds */}
         <button
-          onClick={() => setFilterCategory("all")}
+          onClick={() => onSelectCategory("all")}
           className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all ${
             filterCategory === "all"
               ? "bg-emerald-600 text-white shadow-xs"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
         >
-          All Feeds ({messages.length})
+          All Community Feeds ({messages.length})
         </button>
+
+        {/* Tab 2: 🚓 Police Patrol & Vacation Verification (SECOND TAB) */}
         <button
-          onClick={() => setFilterCategory("waste")}
+          onClick={() => onSelectCategory("police")}
+          className={`px-3.5 py-1.5 rounded-xl font-bold cursor-pointer transition-all flex items-center gap-1.5 ${
+            filterCategory === "police"
+              ? "bg-slate-900 text-cyan-300 ring-2 ring-cyan-400 shadow-md"
+              : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          }`}
+        >
+          <span>🚓</span> Police Patrol &amp; Vacation Verification ({totalPoliceAlerts})
+          {pendingPoliceAlerts.length > 0 && (
+            <span className="bg-amber-400 text-amber-950 text-[10px] px-2 py-0.5 rounded-full font-black animate-pulse">
+              {pendingPoliceAlerts.length} Pending
+            </span>
+          )}
+        </button>
+
+        {/* Tab 3: Waste & Bulky Requests */}
+        <button
+          onClick={() => onSelectCategory("waste")}
           className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all ${
             filterCategory === "waste"
               ? "bg-emerald-600 text-white shadow-xs"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
         >
-          Waste &amp; Bulky ({messages.filter((m) => m.category !== "Police Patrol").length})
-        </button>
-        <button
-          onClick={() => setFilterCategory("police")}
-          className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all flex items-center gap-1 ${
-            filterCategory === "police"
-              ? "bg-slate-900 text-cyan-300 shadow-xs"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-        >
-          <span>🚓</span> Police Patrol Updates ({messages.filter((m) => m.category === "Police Patrol").length})
+          Waste &amp; Bulky Requests ({messages.filter((m) => m.category !== "Police Patrol").length})
         </button>
       </div>
 
@@ -1512,7 +1529,7 @@ function CitizenMessageBoard({
             return (
               <div
                 key={m.id}
-                onClick={() => setSelectedMsgId(m.id)}
+                onClick={() => onSelectMsgId(m.id)}
                 className={`p-3 rounded-2xl border text-xs cursor-pointer transition-all ${
                   isSelected
                     ? isPolice
@@ -1535,13 +1552,15 @@ function CitizenMessageBoard({
                         ? isPolice
                           ? "bg-cyan-400/20 text-cyan-300 border border-cyan-400/30"
                           : "bg-green-100 text-green-800"
-                        : "bg-amber-100 text-amber-800 animate-pulse"
+                        : "bg-amber-100 text-amber-800 animate-pulse border border-amber-300"
                     }`}
                   >
                     {m.status === "resolved"
                       ? isPolice
-                        ? "Patrol Delivered"
+                        ? "Verified & Safe ✓"
                         : "Replied"
+                      : isPolice
+                      ? "Pending Verification 🛡️"
                       : "Pending Reply"}
                   </span>
                 </div>
@@ -1583,8 +1602,8 @@ function CitizenMessageBoard({
                     <span className="font-black text-sm text-gray-900">
                       House #{activeMsg.houseId} — {activeMsg.residentName}
                     </span>
-                    <span className="text-[10px] bg-white border border-gray-200 px-2 py-0.5 rounded-full font-mono">
-                      {activeMsg.phone}
+                    <span className="text-[10px] bg-white border border-gray-200 px-2.5 py-0.5 rounded-full font-mono text-gray-600 font-semibold">
+                      Citizen App ID: BG-{activeMsg.houseId}
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 mt-0.5">
@@ -1604,7 +1623,38 @@ function CitizenMessageBoard({
                 </p>
               </div>
 
-              {/* Existing Reply if any */}
+              {/* 🚓 Verification Protocol Box for Pending Police Vacation Alerts */}
+              {activeMsg.category === "Police Patrol" && activeMsg.status === "pending_reply" && (
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-400 rounded-2xl p-4 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <span className="text-3xl p-1 bg-white rounded-xl shadow-2xs border border-amber-300">🚓</span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-wider text-amber-950">
+                          Beat Police Patrol Lock Verification Required
+                        </span>
+                        <span className="text-[10px] bg-amber-400 text-amber-950 font-bold px-2 py-0.5 rounded-full animate-pulse">
+                          Awaiting Hoysala Beat Check
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-900 mt-1 font-medium leading-relaxed">
+                        Citizen has locked premises for travel. Beat officer can physically verify padlock &amp; perimeter, then send instant verification check-in to citizen app.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      onVerifyPoliceTicket(activeMsg.id, activeMsg.houseId);
+                    }}
+                    className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-400 font-black rounded-xl text-xs transition-all shadow-md cursor-pointer shrink-0 flex items-center gap-1.5 hover:scale-102 active:scale-98"
+                  >
+                    <span>🛡️</span> Verify Padlock &amp; Send Check-in to App
+                  </button>
+                </div>
+              )}
+
+              {/* Existing Reply / Verification Status if any */}
               {activeMsg.officialReply && (
                 <div
                   className={`rounded-2xl p-4 shadow-2xs mb-4 border ${
@@ -1809,7 +1859,7 @@ function TheaterSeatingGrid({
             <span>🎭</span> Interactive Community Seating Theater (0000 to 1000)
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Every seat is an interactive mascot sparrow. Click any seat to view resident profile, address, phone & 12-month records.
+            Every seat is an interactive mascot sparrow. Click any seat to view resident profile, address &amp; 12-month records.
           </p>
         </div>
 
@@ -2005,6 +2055,8 @@ export default function GovDashboard() {
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [now, setNow] = useState<Date | null>(null);
+  const [boardCategory, setBoardCategory] = useState<"all" | "police" | "waste">("all");
+  const [selectedMsgId, setSelectedMsgId] = useState<string>("MSG-104");
 
   useEffect(() => {
     setNow(new Date());
@@ -2060,22 +2112,22 @@ export default function GovDashboard() {
           const currentMonthData = updatedMonths[9];
 
           let policePatrol = h.policePatrol;
-          if (newStatus === "out_of_station" && !policePatrol) {
+          if (newStatus === "out_of_station") {
             policePatrol = createPolicePatrolRecord(h.id, h.residentName);
             const newPoliceMsg: MessageItem = {
               id: `MSG-POL-${Date.now()}`,
               houseId: h.id,
               residentName: h.residentName,
-              phone: h.phone,
               category: "Police Patrol",
-              messageText: `Vacation Alert: House #${h.id} (${h.residentName}) marked Out of Station. Automated link dispatched to Koramangala Police Hoysala Beat #4.`,
+              messageText: `Vacation Alert: House #${h.id} (${h.residentName}, ${h.block}) enabled Vacation Mode via citizen app. Automated beat patrol alert dispatched — awaiting Hoysala Beat #4 physical padlock verification.`,
               timestamp: "Just now",
-              status: "resolved",
-              officialReply: "🚓 Hoysala Patrol Beat #4 (HC Suresh K.) assigned! Night vigil scheduled. Patrol check-in link activated.",
-              replyTime: "Just now",
-              officerName: "HC Suresh K. (Beat Patrol Officer)",
+              status: "pending_reply",
             };
             setMessages((prevMsg) => [newPoliceMsg, ...prevMsg]);
+            // Automatically switch Government Board to Tab 2 (Police Patrol & Vacation Verification)!
+            setBoardCategory("police");
+            setSelectedMsgId(newPoliceMsg.id);
+            sfx.policeChime();
           }
 
           const updated: HouseSeat = {
@@ -2095,6 +2147,101 @@ export default function GovDashboard() {
         return h;
       })
     );
+  }
+
+  function handlePushVacationPoliceAlert(specificHouseId?: string) {
+    const target = specificHouseId
+      ? houses.find((h) => h.id === specificHouseId)
+      : (selectedHouse || houses.find((h) => h.status !== "out_of_station") || houses[42]);
+
+    if (!target) return;
+
+    const updatedMonths = generate12Months(target.numericId, "out_of_station");
+    const currentMonthData = updatedMonths[9];
+    const patrolRecord = target.policePatrol ?? createPolicePatrolRecord(target.id, target.residentName);
+
+    const updatedTarget: HouseSeat = {
+      ...target,
+      status: "out_of_station",
+      monthDropsCount: currentMonthData.daysDropped,
+      twelveMonths: updatedMonths,
+      policePatrol: patrolRecord,
+    };
+
+    setHouses((prev) => prev.map((h) => (h.id === target.id ? updatedTarget : h)));
+    if (selectedHouse && selectedHouse.id === target.id) {
+      setSelectedHouse(updatedTarget);
+    }
+
+    const newPoliceMsg: MessageItem = {
+      id: `MSG-POL-${Date.now()}`,
+      houseId: target.id,
+      residentName: target.residentName,
+      category: "Police Patrol",
+      messageText: `Vacation Alert: House #${target.id} (${target.residentName}, ${target.block}) pushed Vacation Mode via citizen app. Automated beat patrol alert dispatched — awaiting Hoysala Beat #4 physical padlock verification.`,
+      timestamp: "Just now",
+      status: "pending_reply",
+    };
+
+    setMessages((prev) => [newPoliceMsg, ...prev]);
+    // Automatically switch Government Board to Tab 2 (Police Patrol & Vacation Verification)!
+    setBoardCategory("police");
+    setSelectedMsgId(newPoliceMsg.id);
+    sfx.policeChime();
+
+    const boardEl = document.getElementById("citizen-message-board");
+    if (boardEl) {
+      boardEl.scrollIntoView({ behavior: "smooth" });
+    }
+  }
+
+  function handleVerifyPoliceTicket(msgId: string, houseId: string) {
+    const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    const verifiedCheckIn: PoliceCheckInReply = {
+      id: `CHK-${houseId}-${Date.now()}`,
+      timestamp: timeStr,
+      officerName: "HC Suresh K.",
+      badgeNumber: "HC-4412",
+      patrolVehicle: "Hoysala 12",
+      message: `Perimeter & front gate padlock verified securely locked by Beat Officer HC Suresh K. (Hoysala 12) at ${timeStr}. Verified safe for vacation period 🛡️`,
+      lockStatus: "VERIFIED_LOCKED",
+    };
+
+    setHouses((prev) =>
+      prev.map((h) => {
+        if (h.id === houseId) {
+          const existingPatrol = h.policePatrol ?? createPolicePatrolRecord(h.id, h.residentName);
+          const updatedPatrol: PolicePatrolRecord = {
+            ...existingPatrol,
+            status: "VERIFIED_SAFE",
+            checkIns: [verifiedCheckIn, ...existingPatrol.checkIns],
+          };
+          const updatedHouse = { ...h, policePatrol: updatedPatrol };
+          if (selectedHouse && selectedHouse.id === houseId) {
+            setSelectedHouse(updatedHouse);
+          }
+          return updatedHouse;
+        }
+        return h;
+      })
+    );
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id === msgId) {
+          return {
+            ...m,
+            status: "resolved",
+            officialReply: `🚓 Hoysala Beat Unit #4 (HC Suresh K.): Front gate padlock verified intact & premises securely locked at ${timeStr}. Delivered directly to Citizen App.`,
+            replyTime: "Just now",
+            officerName: "HC Suresh K. (Beat Patrol Officer)",
+          };
+        }
+        return m;
+      })
+    );
+
+    sfx.policeChime();
   }
 
   function handleSendPoliceCheckIn(
@@ -2135,12 +2282,11 @@ export default function GovDashboard() {
       id: `MSG-POL-${Date.now()}`,
       houseId,
       residentName: targetHouse?.residentName ?? "Resident",
-      phone: targetHouse?.phone ?? "",
       category: "Police Patrol",
       messageText: `Beat Patrol Officer Check-in for House #${houseId}: "${replyMessage}"`,
       timestamp: "Just now",
       status: "resolved",
-      officialReply: `Pushed to resident mobile app: "${replyMessage}" (Padlock Verified)`,
+      officialReply: `Pushed to citizen app: "${replyMessage}" (Padlock Verified)`,
       replyTime: "Just now",
       officerName: "HC Suresh K. (Beat Patrol Officer)",
     };
@@ -2198,7 +2344,6 @@ export default function GovDashboard() {
       id: `MSG-${Date.now()}`,
       houseId: randomHouse.id,
       residentName: randomHouse.residentName,
-      phone: randomHouse.phone,
       category: "Bulky Pickup",
       messageText: `Hi Ward Officer! House #${randomHouse.id} has some extra carton boxes and cardboard recyclables ready at the door. Please notify driver!`,
       timestamp: "Just now",
@@ -2387,7 +2532,7 @@ export default function GovDashboard() {
                             Auto-Notification Sent To: {a.recipientName} ({a.recipientRole})
                           </p>
                           <p className="text-[11px] text-gray-500">
-                            Phone: {a.recipientPhone} · Channel: {a.deliveryChannel}
+                            Channel: {a.deliveryChannel} · Immediate Radio &amp; App Push
                           </p>
                         </div>
                       </div>
@@ -2415,9 +2560,15 @@ export default function GovDashboard() {
         <section>
           <CitizenMessageBoard
             messages={messages}
+            filterCategory={boardCategory}
+            onSelectCategory={setBoardCategory}
+            selectedMsgId={selectedMsgId}
+            onSelectMsgId={setSelectedMsgId}
             onReply={handleReplyMessage}
             onNewMockMessage={handleSimulateIncomingMessage}
+            onPushVacationMode={handlePushVacationPoliceAlert}
             onSimulatePoliceCheckIn={handleSimulatePoliceCheckIn}
+            onVerifyPoliceTicket={handleVerifyPoliceTicket}
           />
         </section>
 
