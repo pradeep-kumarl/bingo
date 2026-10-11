@@ -11,11 +11,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 // Waste type display metadata
 const WASTE_META: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-  wet:       { label: 'Wet Waste',       icon: '🌊', color: '#15803d', bg: '#dcfce7' },
-  sanitary:  { label: 'Sanitary Waste',  icon: '🚽', color: '#b45309', bg: '#fef3c7' },
-  dry:       { label: 'Dry / Recyclable',icon: '♻️', color: '#1d4ed8', bg: '#dbeafe' },
-  furniture: { label: 'Bulky Furniture', icon: '🛋️', color: '#7c3aed', bg: '#ede9fe' },
-  event:     { label: 'Event Waste',     icon: '🎉', color: '#db2777', bg: '#fce7f3' },
+  wet:       { label: 'Organic (Wet) Waste',             icon: '🥬', color: '#15803d', bg: '#dcfce7' },
+  sanitary:  { label: 'Sanitary / Soiled (Incineration)', icon: '🔥', color: '#b45309', bg: '#fef3c7' },
+  dry:       { label: 'Dry / Recyclables',               icon: '📦', color: '#1d4ed8', bg: '#dbeafe' },
+  furniture: { label: 'Bulky / Furniture',               icon: '🛋️', color: '#7c3aed', bg: '#ede9fe' },
+  event:     { label: 'Bulk / Event Waste',              icon: '🎉', color: '#db2777', bg: '#fce7f3' },
 };
 
 interface TokenData {
@@ -44,11 +44,11 @@ function BayContent({ params }: { params: Promise<{ bayId: string }> }) {
       const fakeMeta = WASTE_META[bayId.replace('bay-', '').replace('-01', '')] ?? WASTE_META.wet;
       const wasteType = bayId.replace('bay-', '').replace('-01', '');
       const expTime = Math.floor(Date.now() / 1000) + 60;
-      const payload = { bayId, zoneId: 'zone-koramangala-4', wasteType, iat: Math.floor(Date.now() / 1000), exp: expTime, nonce: fakeNonce };
+      const payload = { bayId, zoneId: 'Zone 1 (0000–1000)', wasteType, iat: Math.floor(Date.now() / 1000), exp: expTime, nonce: fakeNonce };
       const qrData = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
       const fakeSig = 'demo-sig-' + fakeNonce;
       const deepLink = `bingo://scan?data=${qrData}&sig=${fakeSig}`;
-      setToken({ qrData, signature: fakeSig, deepLink, wasteType, zoneId: 'zone-koramangala-4', bayId, exp: expTime, expiresInSeconds: 60 });
+      setToken({ qrData, signature: fakeSig, deepLink, wasteType, zoneId: 'Zone 1 (0000–1000)', bayId, exp: expTime, expiresInSeconds: 60 });
       setError('');
       setSecondsLeft(55);
       return;

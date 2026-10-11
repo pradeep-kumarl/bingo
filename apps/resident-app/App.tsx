@@ -51,11 +51,11 @@ type Screen =
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const WASTE_META: Record<WasteType, { label: string; icon: string }> = {
-  wet:       { label: 'Wet',       icon: '🌊' },
-  sanitary:  { label: 'Sanitary',  icon: '🚽' },
-  dry:       { label: 'Dry',       icon: '♻️' },
-  furniture: { label: 'Furniture', icon: '🛋️' },
-  event:     { label: 'Event',     icon: '🎉' },
+  wet:       { label: 'Organic (Wet)',               icon: '🥬' },
+  sanitary:  { label: 'Sanitary / Soiled (Burning)', icon: '🔥' },
+  dry:       { label: 'Dry / Recyclables',           icon: '📦' },
+  furniture: { label: 'Bulky Furniture',             icon: '🛋️' },
+  event:     { label: 'Bulk / Event Waste',          icon: '🎉' },
 };
 
 const SAMPLE_DEEP_LINK =
