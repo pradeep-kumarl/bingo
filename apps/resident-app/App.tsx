@@ -316,35 +316,169 @@ export default function App() {
     setActiveTab('Home');
   }
 
-  // Vacation Mode Toggle (Out of station does NOT reduce compliance!)
-  function handleToggleVacation() {
-    const nextStatus: SeatStatus = house.status === 'out_of_station' ? 'pending' : 'out_of_station';
-    const updatedMonths = generate12Months(house.numericId, nextStatus);
+  // Quick State Toggle Handler (Matches Govt Portal: Mark Dropped / Freeze / Set Vacation Mode / End Vacation Mode)
+  function handleToggleStatus(newStatus: SeatStatus) {
+    const todayDateStr = new Date().toISOString().split('T')[0];
+    const displayDate = new Date().toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
-    setHouse((prev) => ({
-      ...prev,
-      status: nextStatus,
-      monthDropsCount: updatedMonths[9].daysDropped,
-      twelveMonths: updatedMonths,
-    }));
+    const updatedMonths = generate12Months(house.numericId, newStatus);
 
-    if (nextStatus === 'out_of_station') {
+    if (newStatus === 'dropped') {
+      setHouse((prev) => ({
+        ...prev,
+        status: 'dropped',
+        streak: prev.status === 'dropped' ? prev.streak : prev.streak + 1,
+        dropTimeToday: prev.dropTimeToday || timeStr,
+        lastDropDate: todayDateStr,
+        monthDropsCount: updatedMonths[9].daysDropped,
+        twelveMonths: updatedMonths,
+      }));
+      Alert.alert(
+        'Marked Dropped! ✨',
+        `House #${house.id} marked as dropped today (${displayDate} at ${timeStr}). Chirpy is happy and your streak is active!`
+      );
+    } else if (newStatus === 'out_of_station') {
+      setHouse((prev) => ({
+        ...prev,
+        status: 'out_of_station',
+        monthDropsCount: updatedMonths[9].daysDropped,
+        twelveMonths: updatedMonths,
+      }));
+
       const vacationMsg: CitizenMessage = {
         id: `MSG-TRV-${Date.now()}`,
         houseId: house.id,
         category: 'Travel / Freeze',
-        messageText: `Travel Notice: House #${house.id} activated Out of Station. Pausing daily drops with 100% compliance score protected 🏖️`,
+        messageText: `Travel Notice: House #${house.id} activated Vacation Mode via citizen app. Daily waste drops paused & streak protected 🏖️`,
         timestamp: 'Just now',
         status: 'pending_reply',
       };
       setMessages((prev) => [vacationMsg, ...prev]);
+
       Alert.alert(
-        'Out of Station Activated 🏖️',
-        'Compliance Protected! Vacation days are exempt from requirements, so your compliance percentage does NOT reduce.'
+        'Vacation Mode Active 🏖️',
+        'Streak Protected! Vacation days are exempt from obligations, keeping your compliance percentage protected while traveling.'
       );
     } else {
-      Alert.alert('Welcome Back! 🏠', 'Out of station ended. Daily waste drop tracking resumed.');
+      // 'pending'
+      setHouse((prev) => ({
+        ...prev,
+        status: 'pending',
+        streak: prev.status === 'dropped' ? Math.max(0, prev.streak - 1) : prev.streak,
+        dropTimeToday: undefined,
+        monthDropsCount: updatedMonths[9].daysDropped,
+        twelveMonths: updatedMonths,
+      }));
+      Alert.alert('Status Set to Pending 🥶', 'Daily waste drop tracking is now pending for today.');
     }
+  }
+
+  // Vacation Mode Toggle helper
+  function handleToggleVacation() {
+    handleToggleStatus(house.status === 'out_of_station' ? 'pending' : 'out_of_station');
+  }
+
+  // Helper to render Vacation Mode / Holiday Banner (Matching Gov Web Portal)
+  function renderVacationBanner() {
+    const isVacation = house.status === 'out_of_station';
+    if (isVacation) {
+      return (
+        <View style={styles.vacationBannerActive}>
+          <View style={styles.vacationBannerContent}>
+            <View style={styles.vacationIconBoxActive}>
+              <Text style={styles.vacationIconLarge}>🏖️</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.vacationTitleActive}>Vacation Mode Active (Streak Protected)</Text>
+              <Text style={styles.vacationDescActive}>
+                Household is traveling. Daily waste drops are paused and your Chirpy streak is frozen safe.
+              </Text>
+            </View>
+          </View>
+          <Pressable
+            style={styles.endVacationBtn}
+            onPress={() => handleToggleStatus('pending')}
+          >
+            <Text style={styles.endVacationBtnText}>End Vacation Mode 🏠</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.vacationBanner}>
+        <View style={styles.vacationBannerContent}>
+          <Text style={styles.vacationIcon}>🏖️</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.vacationTitle}>Planning travel or holiday?</Text>
+            <Text style={styles.vacationDesc}>
+              Turn on Vacation Mode to protect your household's Chirpy streak while away.
+            </Text>
+          </View>
+        </View>
+        <Pressable
+          style={styles.setVacationBtn}
+          onPress={() => handleToggleStatus('out_of_station')}
+        >
+          <Text style={styles.setVacationBtnText}>Set Vacation Mode 🏖️</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // Helper to render Quick State Overrides: Mark Dropped & Set Vacation Mode (Matching Gov Web Portal)
+  function renderQuickStateControls() {
+    const isDropped = house.status === 'dropped';
+    const isVacation = house.status === 'out_of_station';
+
+    return (
+      <View style={styles.quickOverrideCard}>
+        <View style={styles.quickOverrideHeaderRow}>
+          <Text style={styles.quickOverrideLabel}>Quick State Overrides:</Text>
+          <Text style={styles.quickOverrideSub}>Govt Portal Sync</Text>
+        </View>
+        <View style={styles.quickOverrideButtonRow}>
+          <Pressable
+            style={[
+              styles.quickOverrideBtn,
+              isDropped ? styles.quickOverrideBtnMuted : styles.quickOverrideBtnGreen,
+            ]}
+            onPress={() => handleToggleStatus(isDropped ? 'pending' : 'dropped')}
+          >
+            <Text
+              style={[
+                styles.quickOverrideBtnText,
+                isDropped ? styles.quickOverrideBtnTextMuted : styles.quickOverrideBtnTextWhite,
+              ]}
+            >
+              {isDropped ? 'Freeze (Pending 🥶)' : 'Mark Dropped (Happy ✨)'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[
+              styles.quickOverrideBtn,
+              isVacation ? styles.quickOverrideBtnMuted : styles.quickOverrideBtnOrange,
+            ]}
+            onPress={() => handleToggleStatus(isVacation ? 'pending' : 'out_of_station')}
+          >
+            <Text
+              style={[
+                styles.quickOverrideBtnText,
+                isVacation ? styles.quickOverrideBtnTextMuted : styles.quickOverrideBtnTextWhite,
+              ]}
+            >
+              {isVacation ? 'End Vacation Mode 🏠' : 'Set Vacation Mode 🏖️'}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
   }
 
   // Send Bulk Waste Order / Message to Admin Desk
@@ -411,6 +545,12 @@ export default function App() {
             </Text>
           </View>
         </View>
+
+        {/* 🏖️ Vacation / Holiday Mode Banner (from Gov Web) */}
+        {renderVacationBanner()}
+
+        {/* ⚡ Quick State Overrides: Mark Dropped & Set Vacation Mode (from Gov Web) */}
+        {renderQuickStateControls()}
 
         {/* Big Action Navigation Buttons */}
         <View style={styles.actionGrid}>
@@ -504,26 +644,6 @@ export default function App() {
             ))}
           </View>
         </View>
-
-        {/* Out of Station Toggle */}
-        <View style={styles.card}>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.toggleTitle}>🏖️ Out of Station / Vacation</Text>
-              <Text style={styles.toggleDesc}>
-                Traveling? Protects streak & does NOT reduce compliance percentage.
-              </Text>
-            </View>
-            <Pressable
-              style={[styles.toggleBtn, isVacation && styles.toggleBtnActive]}
-              onPress={handleToggleVacation}
-            >
-              <Text style={[styles.toggleBtnText, isVacation && styles.toggleBtnTextActive]}>
-                {isVacation ? 'Active 🏖️' : 'Turn On'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
       </ScrollView>
     );
   }
@@ -593,6 +713,12 @@ export default function App() {
             </View>
           </View>
         </View>
+
+        {/* 🏖️ Vacation / Holiday Mode Banner (from Gov Web) */}
+        {renderVacationBanner()}
+
+        {/* ⚡ Quick State Overrides: Mark Dropped & Set Vacation Mode (from Gov Web) */}
+        {renderQuickStateControls()}
 
         {/* Permanent Allotted Household Identifier Card (Locked like Electricity Meter / Vehicle Reg) */}
         <View style={styles.card}>
@@ -1095,21 +1221,178 @@ const styles = StyleSheet.create({
   wastePillIcon: { fontSize: 16 },
   wastePillText: { fontSize: 12, fontWeight: '700', color: C.textMain },
 
-  // Vacation Toggle
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  toggleTitle: { fontSize: 15, fontWeight: '800', color: C.textMain },
-  toggleDesc: { fontSize: 12, color: C.textMute, marginTop: 2, lineHeight: 16 },
-  toggleBtn: {
-    backgroundColor: '#F3F4F6',
+  // 🏖️ Vacation Mode Banner Styles (matching Gov Web)
+  vacationBanner: {
+    backgroundColor: '#FFFBEB',
     borderWidth: 1.5,
-    borderColor: C.border,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 14,
+    borderColor: '#FDE68A',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    gap: 12,
   },
-  toggleBtnActive: { backgroundColor: '#F59E0B', borderColor: '#D97706' },
-  toggleBtnText: { fontSize: 12, fontWeight: '800', color: C.textMain },
-  toggleBtnTextActive: { color: '#FFFFFF' },
+  vacationBannerActive: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1.5,
+    borderColor: '#FCD34D',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    gap: 12,
+  },
+  vacationBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  vacationIconBoxActive: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  vacationIcon: {
+    fontSize: 28,
+  },
+  vacationIconLarge: {
+    fontSize: 24,
+  },
+  vacationTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#78350F',
+  },
+  vacationTitleActive: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#451A03',
+  },
+  vacationDesc: {
+    fontSize: 11,
+    color: '#92400E',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  vacationDescActive: {
+    fontSize: 11,
+    color: '#92400E',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  setVacationBtn: {
+    backgroundColor: '#F59E0B',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
+    shadowColor: '#F59E0B',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  setVacationBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  endVacationBtn: {
+    backgroundColor: '#D97706',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
+    shadowColor: '#D97706',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  endVacationBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  // ⚡ Quick Override Action Controls (matching Gov Web)
+  quickOverrideCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  quickOverrideHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  quickOverrideLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#4B5563',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  quickOverrideSub: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontWeight: '600',
+  },
+  quickOverrideButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  quickOverrideBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickOverrideBtnGreen: {
+    backgroundColor: '#059669',
+    shadowColor: '#059669',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  quickOverrideBtnOrange: {
+    backgroundColor: '#F59E0B',
+    shadowColor: '#F59E0B',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  quickOverrideBtnMuted: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  quickOverrideBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  quickOverrideBtnTextWhite: {
+    color: '#FFFFFF',
+  },
+  quickOverrideBtnTextMuted: {
+    color: '#4B5563',
+  },
 
   // Navigation Header
   navHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },

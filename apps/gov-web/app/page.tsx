@@ -701,13 +701,11 @@ function SeatDetailModal({
   house,
   isAdmin,
   onClose,
-  onToggleStatus,
   onEditHouse,
 }: {
   house: HouseSeat;
   isAdmin: boolean;
   onClose: () => void;
-  onToggleStatus: (newStatus: SeatStatus) => void;
   onEditHouse: () => void;
 }) {
   const totalYearDrops = house.twelveMonths.reduce((acc, m) => acc + m.daysDropped, 0);
@@ -798,48 +796,16 @@ function SeatDetailModal({
             </div>
           </div>
 
-          {/* Vacation Mode Status & Controls */}
-          {house.status === "out_of_station" ? (
-            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl p-1 bg-white rounded-xl border border-amber-200 shadow-2xs">🏖️</span>
-                <div>
-                  <h4 className="font-bold text-amber-950 text-sm">Vacation Mode Active (Streak Protected)</h4>
-                  <p className="text-[11px] text-amber-800 mt-0.5">
-                    Household is traveling. Daily waste drops are paused and your Chirpy streak is frozen safe.
-                  </p>
-                </div>
+          {/* Vacation Mode Status (Informational for Government Admin) */}
+          {house.status === "out_of_station" && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex items-center gap-3 text-xs">
+              <span className="text-3xl p-1 bg-white rounded-xl border border-amber-200 shadow-2xs">🏖️</span>
+              <div>
+                <h4 className="font-bold text-amber-950 text-sm">Vacation Mode Active (Streak Protected)</h4>
+                <p className="text-[11px] text-amber-800 mt-0.5">
+                  Household is traveling (reported via Citizen Mobile App). Daily waste collection is paused and compliance percentage is protected.
+                </p>
               </div>
-              <button
-                onClick={() => {
-                  onToggleStatus("pending");
-                  sfx.defrost();
-                }}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
-              >
-                End Vacation Mode 🏠
-              </button>
-            </div>
-          ) : (
-            <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5">
-                <span className="text-2xl">🏖️</span>
-                <div>
-                  <p className="font-bold text-amber-900">Planning travel or holiday?</p>
-                  <p className="text-[11px] text-amber-700">
-                    Turn on Vacation Mode to protect your household's Chirpy streak while away.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  onToggleStatus("out_of_station");
-                  sfx.chirp();
-                }}
-                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
-              >
-                Set Vacation Mode 🏖️
-              </button>
             </div>
           )}
 
@@ -965,41 +931,6 @@ function SeatDetailModal({
             </div>
           </div>
 
-          {/* Quick Status Action Controls */}
-          <div className="border-t border-gray-200 pt-4 flex flex-wrap gap-2 justify-between items-center">
-            <span className="text-xs text-gray-400 font-medium">Quick State Overrides:</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  onToggleStatus(house.status === "dropped" ? "pending" : "dropped");
-                  sfx.defrost();
-                }}
-                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
-                  house.status === "dropped"
-                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    : "bg-emerald-600 text-white hover:bg-emerald-700 shadow"
-                }`}
-              >
-                {house.status === "dropped" ? "Freeze (Pending 🥶)" : "Mark Dropped (Happy ✨)"}
-              </button>
-
-              <button
-                onClick={() => {
-                  onToggleStatus(house.status === "out_of_station" ? "pending" : "out_of_station");
-                  if (house.status !== "out_of_station") {
-                    sfx.chirp();
-                  }
-                }}
-                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
-                  house.status === "out_of_station"
-                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    : "bg-amber-500 text-white hover:bg-amber-600 shadow"
-                }`}
-              >
-                {house.status === "out_of_station" ? "End Vacation Mode 🏠" : "Set Vacation Mode 🏖️"}
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -2109,7 +2040,6 @@ export default function GovDashboard() {
           house={selectedHouse}
           isAdmin={isAdmin}
           onClose={() => setSelectedHouse(null)}
-          onToggleStatus={handleToggleHouseStatus}
           onEditHouse={() => {
             setEditingHouse(selectedHouse);
             setSelectedHouse(null);
