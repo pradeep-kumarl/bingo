@@ -43,7 +43,7 @@ interface MonthPerformance {
 }
 
 interface HouseSeat {
-  id: string; // e.g. "0104", "0042"
+  id: string; // e.g. "0082", "0104"
   numericId: number;
   block: string;
   status: SeatStatus;
@@ -52,6 +52,7 @@ interface HouseSeat {
   monthTotalDays: number;
   dropTimeToday?: string;
   lastDropDate?: string; // "YYYY-MM-DD"
+  octoberDropsCount?: number; // Tracks October drop count (e.g. 19 -> 20)
   residentName: string;
   address: string;
   assignedBadge: string;
@@ -74,7 +75,7 @@ type TabKey = 'Home' | 'MyTab' | 'BulkOrder' | 'CameraScan';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const WASTE_META: Record<WasteType, { label: string; icon: string; desc: string }> = {
-  wet:       { label: 'Organic (Wet)',               icon: '🥬', desc: 'Compostable food & kitchen waste' },
+  wet:       { label: 'Waste Collection',            icon: '🗑️', desc: 'Daily segregated household waste collection' },
   sanitary:  { label: 'Sanitary / Soiled (Burning)', icon: '🔥', desc: 'Diapers & sanitary waste for incineration' },
   dry:       { label: 'Dry / Recyclables',           icon: '📦', desc: 'Paper, cardboard, plastics & cans' },
   furniture: { label: 'Bulky Furniture',             icon: '🛋️', desc: 'Mattresses, chairs & timber' },
@@ -84,13 +85,19 @@ const WASTE_META: Record<WasteType, { label: string; icon: string; desc: string 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
+const INDIAN_NAMES = [
+  'Aarav Kulkarni', 'Priya Sharma', 'Devika Menon', 'Kabir Mehta', 'Lakshmi Narayanan', 'Vikram Sengupta',
+  'Ananya Rao', 'Rohan Joshi', 'Deepa Nambiar', 'Sunil Reddy',
+  'Tanvi Hegde', 'Aditya Nair', 'Sneha Iyer', 'Rajesh Deshmukh', 'Pooja Varma',
+];
+
 /**
  * 12-Month Performance generator:
  * Note: Out of Station does NOT reduce compliance percentage!
  * Vacation days are exempt from obligation (total active required days is reduced),
  * keeping compliance at 100% or protected rate.
  */
-function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPerformance[] {
+function generate12Months(houseIndex: number, todayStatus: SeatStatus, customOctDrops?: number): MonthPerformance[] {
   return MONTH_NAMES.map((name, mIdx) => {
     const totalDays = MONTH_DAYS[mIdx];
     const monthHash = ((houseIndex * 41 + mIdx * 29) * 2654435761) >>> 0;
@@ -100,14 +107,19 @@ function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPer
     let activeObligationDays = totalDays;
 
     if (mIdx === 9) { // October (current month)
-      if (todayStatus === 'out_of_station') {
-        // Vacation Mode / Out of Station: 8 vacation days are protected and NOT penalized.
-        // Active required days reduced, so compliance does NOT drop!
-        const vacationDays = 8;
+      const vacationDays = 8;
+      if (customOctDrops !== undefined) {
+        daysDropped = customOctDrops;
+      } else if (todayStatus === 'out_of_station') {
         activeObligationDays = totalDays - vacationDays;
-        daysDropped = Math.round((activeObligationDays * rateFactor) / 100);
+        daysDropped = 19; // baseline 19 drops for October in vacation mode (matches portal 19/31d)
       } else if (todayStatus === 'dropped') {
-        daysDropped = Math.min(totalDays, daysDropped + 2);
+        daysDropped = 20; // 20 drops when scanned today!
+      } else {
+        daysDropped = 19; // baseline 19 drops for October
+      }
+      if (todayStatus === 'out_of_station') {
+        activeObligationDays = totalDays - vacationDays;
       }
     }
 
@@ -137,22 +149,25 @@ function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPer
   });
 }
 
-function createHouseSeat(houseId: string, status: SeatStatus = 'pending'): HouseSeat {
-  const numericId = parseInt(houseId.replace(/\D/g, ''), 10) || 104;
+function createHouseSeat(houseId: string, status: SeatStatus = 'out_of_station', customOctDrops: number = 19): HouseSeat {
+  const numericId = parseInt(houseId.replace(/\D/g, ''), 10) || 82;
   const block = numericId <= 250 ? 'Block A' : numericId <= 500 ? 'Block B' : numericId <= 750 ? 'Block C' : 'Block D';
-  const twelveMonths = generate12Months(numericId, status);
+  const twelveMonths = generate12Months(numericId, status, customOctDrops);
   const currentMonth = twelveMonths[9];
+  const residentName = numericId === 82 ? 'Aarav Kulkarni' : numericId === 104 ? 'Priya Sharma' : INDIAN_NAMES[numericId % INDIAN_NAMES.length];
 
   return {
     id: houseId.padStart(4, '0'),
     numericId,
     block,
     status,
-    streak: status === 'dropped' ? 8 : status === 'out_of_station' ? 7 : 0,
+    streak: 8,
     monthDropsCount: currentMonth.daysDropped,
     monthTotalDays: currentMonth.totalDays,
     dropTimeToday: status === 'dropped' ? '08:24 AM' : undefined,
-    residentName: 'Priya Sharma',
+    lastDropDate: undefined,
+    octoberDropsCount: customOctDrops,
+    residentName,
     address: `House #${houseId.padStart(4, '0')}, ${block}, Green Glen Layout, Ward 151`,
     assignedBadge: `BG-RFID-${houseId.padStart(4, '0')}`,
     twelveMonths,
@@ -189,8 +204,8 @@ function ChirpyMascot({ mood, size = 64 }: { mood: 'happy' | 'frozen' | 'vacatio
 
 // ─── Main App Component ───────────────────────────────────────────────────────
 export default function App() {
-  const [houseId, setHouseId] = useState('0104');
-  const [house, setHouse] = useState<HouseSeat>(() => createHouseSeat('0104', 'pending'));
+  const [houseId, setHouseId] = useState('0082');
+  const [house, setHouse] = useState<HouseSeat>(() => createHouseSeat('0082', 'out_of_station', 19));
   const [activeTab, setActiveTab] = useState<TabKey>('Home');
 
   // Messages / Bulk orders sent to Admin Panel
@@ -233,7 +248,7 @@ export default function App() {
   // Drop recorded notification
   const [lastDropWaste, setLastDropWaste] = useState<WasteType>('wet');
   const [lastDropTimestamp, setLastDropTimestamp] = useState<string>('');
-  const [lastDropBayLabel, setLastDropBayLabel] = useState<string>('Organic (Wet) Waste Bay');
+  const [lastDropBayLabel, setLastDropBayLabel] = useState<string>('Waste Collection Bay');
 
   // House ID is permanently allotted by Govt Office (like electricity meter or vehicle reg number).
   // Tenant or ownership updates can only be modified from the authorized Govt Admin Panel.
@@ -265,6 +280,7 @@ export default function App() {
   }
 
   // Handle Scan recording — Strictly 1 drop per day!
+  // Updates October from 19 to 20. If scanned again today, stays 20. Changes only when date changes.
   function handleRecordWasteDrop(type: WasteType = 'wet', bayCode?: string) {
     const todayDateStr = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
     const displayDate = new Date().toLocaleDateString('en-IN', {
@@ -275,15 +291,17 @@ export default function App() {
     const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
     // Check if waste was ALREADY dropped today
-    if (house.status === 'dropped' && house.lastDropDate === todayDateStr) {
+    if (house.lastDropDate === todayDateStr) {
       Alert.alert(
         'Already Recorded Today! ✅',
-        `House #${house.id} has already recorded today's waste drop on ${displayDate} at ${house.dropTimeToday}.\n\nNext drop opens tomorrow morning!`
+        `House #${house.id} has already recorded today's waste drop on ${displayDate} at ${house.dropTimeToday ?? timeStr}.\n\nOctober count is ${house.octoberDropsCount ?? 20} / 31 days.\n\nNext drop opens tomorrow morning!`
       );
       return;
     }
 
-    const updatedMonths = generate12Months(house.numericId, 'dropped');
+    // First scan today: increment October drops from 19 to 20!
+    const newOctCount = (house.octoberDropsCount ?? 19) + 1;
+    const updatedMonths = generate12Months(house.numericId, 'dropped', newOctCount);
     const cleanBay = extractCleanBayLabel(bayCode, type);
 
     setHouse((prev) => ({
@@ -292,7 +310,8 @@ export default function App() {
       streak: prev.streak + 1,
       dropTimeToday: timeStr,
       lastDropDate: todayDateStr,
-      monthDropsCount: updatedMonths[9].daysDropped,
+      octoberDropsCount: newOctCount,
+      monthDropsCount: newOctCount,
       twelveMonths: updatedMonths,
     }));
 
@@ -303,7 +322,7 @@ export default function App() {
   }
 
   // Handle Barcode Scanned Event from CameraView
-  function handleBarcodeScanned({ data }: { data: string }) {
+  async function handleBarcodeScanned({ data }: { data: string }) {
     if (scanModalVisible) return;
     let detectedType: WasteType = 'wet';
     const lower = data.toLowerCase();
@@ -311,6 +330,28 @@ export default function App() {
     else if (lower.includes('sanit') || lower.includes('burn')) detectedType = 'sanitary';
     else if (lower.includes('furn') || lower.includes('bulk')) detectedType = 'furniture';
     else if (lower.includes('event')) detectedType = 'event';
+
+    // Broadcast scan to backend API if live QR token
+    try {
+      if (data.includes('data=') && data.includes('sig=')) {
+        const url = new URL(data);
+        const qrDataParam = url.searchParams.get('data');
+        const sigParam = url.searchParams.get('sig');
+        if (qrDataParam && sigParam) {
+          fetch(`${API_BASE}/scans`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              qrData: qrDataParam,
+              signature: sigParam,
+              householdId: house.id,
+            }),
+          }).catch(() => {});
+        }
+      }
+    } catch {
+      // ignore network errors
+    }
 
     handleRecordWasteDrop(detectedType, data);
     setActiveTab('Home');
@@ -326,27 +367,33 @@ export default function App() {
     });
     const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
-    const updatedMonths = generate12Months(house.numericId, newStatus);
-
     if (newStatus === 'dropped') {
+      const isAlreadyDroppedToday = house.lastDropDate === todayDateStr;
+      const newOctCount = isAlreadyDroppedToday ? (house.octoberDropsCount ?? 20) : ((house.octoberDropsCount ?? 19) + 1);
+      const updatedMonths = generate12Months(house.numericId, 'dropped', newOctCount);
+
       setHouse((prev) => ({
         ...prev,
         status: 'dropped',
-        streak: prev.status === 'dropped' ? prev.streak : prev.streak + 1,
+        streak: isAlreadyDroppedToday ? prev.streak : prev.streak + 1,
         dropTimeToday: prev.dropTimeToday || timeStr,
         lastDropDate: todayDateStr,
-        monthDropsCount: updatedMonths[9].daysDropped,
+        octoberDropsCount: newOctCount,
+        monthDropsCount: newOctCount,
         twelveMonths: updatedMonths,
       }));
       Alert.alert(
-        'Marked Dropped! ✨',
-        `House #${house.id} marked as dropped today (${displayDate} at ${timeStr}). Chirpy is happy and your streak is active!`
+        isAlreadyDroppedToday ? 'Already Dropped Today! ✅' : 'Marked Dropped! ✨',
+        `House #${house.id} recorded drop on ${displayDate} (${timeStr}).\n\nOctober count: ${newOctCount} / 31 days.`
       );
     } else if (newStatus === 'out_of_station') {
+      const currentOct = house.octoberDropsCount ?? 19;
+      const updatedMonths = generate12Months(house.numericId, 'out_of_station', currentOct);
+
       setHouse((prev) => ({
         ...prev,
         status: 'out_of_station',
-        monthDropsCount: updatedMonths[9].daysDropped,
+        monthDropsCount: currentOct,
         twelveMonths: updatedMonths,
       }));
 
@@ -366,12 +413,17 @@ export default function App() {
       );
     } else {
       // 'pending'
+      const resetOct = 19;
+      const updatedMonths = generate12Months(house.numericId, 'pending', resetOct);
+
       setHouse((prev) => ({
         ...prev,
         status: 'pending',
         streak: prev.status === 'dropped' ? Math.max(0, prev.streak - 1) : prev.streak,
         dropTimeToday: undefined,
-        monthDropsCount: updatedMonths[9].daysDropped,
+        lastDropDate: undefined,
+        octoberDropsCount: resetOct,
+        monthDropsCount: resetOct,
         twelveMonths: updatedMonths,
       }));
       Alert.alert('Status Set to Pending 🥶', 'Daily waste drop tracking is now pending for today.');

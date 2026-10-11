@@ -185,9 +185,9 @@ const WASTE_META: Record<
   { icon: string; label: string; sub: string; color: string; badgeBg: string }
 > = {
   wet: {
-    icon: "🥬",
-    label: "Organic (Wet)",
-    sub: "Kitchen & compostable waste",
+    icon: "🗑️",
+    label: "Waste Collection",
+    sub: "Segregated daily household waste collection",
     color: "text-emerald-700",
     badgeBg: "bg-emerald-100 text-emerald-800",
   },
@@ -331,7 +331,7 @@ function generate12Months(houseIndex: number, todayStatus: SeatStatus): MonthPer
         activeObligationDays = totalDays - vacationDays;
         daysDropped = Math.round((activeObligationDays * rateFactor) / 100);
       } else if (todayStatus === "dropped") {
-        daysDropped = Math.min(totalDays, daysDropped + 2);
+        daysDropped = Math.min(totalDays, daysDropped + 1);
       }
     }
 

@@ -11,7 +11,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 // Waste type display metadata
 const WASTE_META: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-  wet:       { label: 'Organic (Wet) Waste',             icon: '🥬', color: '#15803d', bg: '#dcfce7' },
+  wet:       { label: 'Waste Collection',                icon: '🗑️', color: '#15803d', bg: '#dcfce7' },
   sanitary:  { label: 'Sanitary / Soiled (Incineration)', icon: '🔥', color: '#b45309', bg: '#fef3c7' },
   dry:       { label: 'Dry / Recyclables',               icon: '📦', color: '#1d4ed8', bg: '#dbeafe' },
   furniture: { label: 'Bulky / Furniture',               icon: '🛋️', color: '#7c3aed', bg: '#ede9fe' },
