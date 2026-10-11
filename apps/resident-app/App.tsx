@@ -51,6 +51,7 @@ interface HouseSeat {
   monthDropsCount: number;
   monthTotalDays: number;
   dropTimeToday?: string;
+  lastDropDate?: string; // "YYYY-MM-DD"
   residentName: string;
   address: string;
   assignedBadge: string;
@@ -231,27 +232,74 @@ export default function App() {
 
   // Drop recorded notification
   const [lastDropWaste, setLastDropWaste] = useState<WasteType>('wet');
+  const [lastDropTimestamp, setLastDropTimestamp] = useState<string>('');
+  const [lastDropBayLabel, setLastDropBayLabel] = useState<string>('Organic (Wet) Waste Bay');
 
   // House ID is permanently allotted by Govt Office (like electricity meter or vehicle reg number).
   // Tenant or ownership updates can only be modified from the authorized Govt Admin Panel.
 
-  // Handle Scan recording
+  // Helper to extract clean human-readable Bay name from QR data / deep links
+  function extractCleanBayLabel(rawCode?: string, type: WasteType = 'wet'): string {
+    if (!rawCode) return `${WASTE_META[type].label} Bay`;
+    try {
+      if (rawCode.includes('bingo://scan?data=')) {
+        const url = new URL(rawCode);
+        const dataParam = url.searchParams.get('data');
+        if (dataParam) {
+          // If base64 json
+          try {
+            const decoded = JSON.parse(atob(dataParam));
+            if (decoded.bayName) return decoded.bayName;
+            if (decoded.bayId) return `Bay #${decoded.bayId}`;
+          } catch {
+            // raw string in data param
+            return `Bay ${dataParam}`;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    if (rawCode.startsWith('BAY-')) return `${rawCode} Station`;
+    return `${WASTE_META[type].label} Bay`;
+  }
+
+  // Handle Scan recording — Strictly 1 drop per day!
   function handleRecordWasteDrop(type: WasteType = 'wet', bayCode?: string) {
+    const todayDateStr = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const displayDate = new Date().toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
     const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+
+    // Check if waste was ALREADY dropped today
+    if (house.status === 'dropped' && house.lastDropDate === todayDateStr) {
+      Alert.alert(
+        'Already Recorded Today! ✅',
+        `House #${house.id} has already recorded today's waste drop on ${displayDate} at ${house.dropTimeToday}.\n\nNext drop opens tomorrow morning!`
+      );
+      return;
+    }
+
     const updatedMonths = generate12Months(house.numericId, 'dropped');
+    const cleanBay = extractCleanBayLabel(bayCode, type);
 
     setHouse((prev) => ({
       ...prev,
       status: 'dropped',
       streak: prev.streak + 1,
       dropTimeToday: timeStr,
+      lastDropDate: todayDateStr,
       monthDropsCount: updatedMonths[9].daysDropped,
       twelveMonths: updatedMonths,
     }));
 
     setLastDropWaste(type);
+    setLastDropTimestamp(`${displayDate} at ${timeStr}`);
+    setLastDropBayLabel(cleanBay);
     setScanModalVisible(true);
-    setScannedResult(bayCode ?? `BAY-${type.toUpperCase()}-01`);
   }
 
   // Handle Barcode Scanned Event from CameraView
@@ -866,14 +914,47 @@ export default function App() {
             <View style={styles.modalIconWrap}>
               <ChirpyMascot mood="happy" size={72} />
             </View>
+
             <Text style={styles.modalTitle}>Waste Drop Recorded! 🎉</Text>
-            <Text style={styles.modalMeta}>
-              {WASTE_META[lastDropWaste].icon} {WASTE_META[lastDropWaste].label} logged successfully at {scannedResult ?? 'Station Bay'}.
+            <Text style={styles.modalSuccessNotice}>
+              {WASTE_META[lastDropWaste].icon} {WASTE_META[lastDropWaste].label} successfully verified and recorded.
             </Text>
+
+            {/* Permanent Allotted House & Date Card */}
+            <View style={styles.modalDropReceipt}>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Permanent Allotted ID:</Text>
+                <Text style={styles.receiptValHighlight}>House #{house.id}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Drop Date & Time:</Text>
+                <Text style={styles.receiptVal}>{lastDropTimestamp}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Collection Point:</Text>
+                <Text style={styles.receiptVal}>{lastDropBayLabel}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Sector Block:</Text>
+                <Text style={styles.receiptVal}>{house.block} (Ward 151)</Text>
+              </View>
+            </View>
+
+            {/* Daily Lock Notice */}
+            <View style={styles.modalNextDayNotice}>
+              <Text style={styles.nextDayIcon}>🔒</Text>
+              <Text style={styles.nextDayText}>
+                Daily drop completed for today! Next scan opens tomorrow morning.
+              </Text>
+            </View>
+
             <View style={styles.modalStreakCard}>
               <Text style={styles.modalStreakVal}>🔥 {house.streak}-Day Active Streak</Text>
-              <Text style={styles.modalStreakSub}>House #{house.id} compliance score is 100% compliant for today!</Text>
+              <Text style={styles.modalStreakSub}>
+                House #{house.id} compliance score is 100% compliant for today!
+              </Text>
             </View>
+
             <Pressable
               style={styles.modalCloseBtn}
               onPress={() => setScanModalVisible(false)}
@@ -1248,10 +1329,38 @@ const styles = StyleSheet.create({
   modalDialog: { backgroundColor: '#FFFFFF', borderRadius: 28, padding: 24, alignItems: 'center', width: '100%', maxWidth: 340 },
   modalIconWrap: { marginBottom: 12 },
   modalTitle: { fontSize: 20, fontWeight: '900', color: C.textMain, textAlign: 'center' },
-  modalMeta: { fontSize: 13, color: C.textMute, textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  modalStreakCard: { backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 16, padding: 14, width: '100%', marginTop: 16, alignItems: 'center' },
+  modalSuccessNotice: { fontSize: 13, color: '#15803D', fontWeight: '700', textAlign: 'center', marginTop: 4, lineHeight: 18 },
+  modalDropReceipt: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 14,
+    width: '100%',
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 8,
+  },
+  receiptRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  receiptLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  receiptVal: { fontSize: 12, fontWeight: '700', color: '#0F172A' },
+  receiptValHighlight: { fontSize: 13, fontWeight: '900', color: '#16A34A', fontFamily: 'monospace' },
+  modalNextDayNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 10,
+    width: '100%',
+  },
+  nextDayIcon: { fontSize: 16 },
+  nextDayText: { flex: 1, fontSize: 11, color: '#92400E', fontWeight: '700', lineHeight: 16 },
+  modalStreakCard: { backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 16, padding: 14, width: '100%', marginTop: 10, alignItems: 'center' },
   modalStreakVal: { fontSize: 16, fontWeight: '900', color: '#16A34A' },
   modalStreakSub: { fontSize: 11, color: '#15803D', marginTop: 4, textAlign: 'center' },
-  modalCloseBtn: { backgroundColor: '#16A34A', borderRadius: 16, paddingVertical: 14, width: '100%', alignItems: 'center', marginTop: 16 },
+  modalCloseBtn: { backgroundColor: '#16A34A', borderRadius: 16, paddingVertical: 14, width: '100%', alignItems: 'center', marginTop: 14 },
   modalCloseBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 });
