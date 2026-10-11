@@ -129,6 +129,8 @@ Resources: # CloudFormation and SAM resources declaration
         Sourcemap: true # Generate source map file for debugging
         EntryPoints: # List entry point files
           - app.ts # Compile app.ts TypeScript source file
+        External:
+          - '@aws-sdk/*'
 # Stack outputs for referencing in frontend apps and deployment scripts
 Outputs: # Stack output exports definition
   HttpApiUrl: # Exported API Gateway base URL

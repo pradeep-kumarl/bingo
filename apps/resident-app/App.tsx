@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const API_BASE = ''; // e.g. 'https://api.bingo.example.com'
+const API_BASE: string = 'https://nhi8wzvkvi.execute-api.ap-south-1.amazonaws.com';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type WasteType = 'wet' | 'sanitary' | 'dry' | 'furniture' | 'event';
